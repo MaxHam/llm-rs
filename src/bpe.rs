@@ -4,7 +4,7 @@ use std::{
 };
 
 #[derive(PartialEq, Debug)]
-struct BytePairEncoder {
+pub struct BytePairEncoder {
     merge_rules: Vec<((u16, u16), u16)>, // (pair, merged_id)
     vocab_size: usize,                   // 256 + num_merges
 }
@@ -30,7 +30,7 @@ impl BytePairEncoder {
         String::from_utf8(bytes).unwrap()
     }
 
-    fn train(corpus: &str, num_merges: u8) -> BytePairEncoder {
+    pub fn train(corpus: &str, num_merges: u8) -> BytePairEncoder {
         let mut tokens: Vec<u16> = corpus.bytes().map(|b| b as u16).collect();
 
         let mut vocab: HashSet<u16> = (0u16..=255u16).collect();
@@ -68,6 +68,30 @@ impl BytePairEncoder {
             merge_rules,
             vocab_size: vocab.len(),
         }
+    }
+
+    pub fn vocabulary(&self) -> HashMap<u16, Vec<u8>> {
+        if self.merge_rules.is_empty() {
+            panic!("You need to train the byte pair encoder before you can get a vocabulary.");
+        }
+
+        // Prefill vocab: each u16 in 0..=255 is a vector containing its byte value
+        let mut vocab: HashMap<u16, Vec<u8>> =
+            (0u16..=255u16).map(|i| (i, vec![i as u8])).collect();
+
+        // For each merge, create the bytes representation by concatenating its parts
+        for (pair, token_id) in &self.merge_rules {
+            let mut bytes = vec![];
+            if let Some(left) = vocab.get(&pair.0) {
+                bytes.extend_from_slice(left);
+            }
+            if let Some(right) = vocab.get(&pair.1) {
+                bytes.extend_from_slice(right);
+            }
+            vocab.insert(*token_id, bytes);
+        }
+
+        vocab
     }
 }
 
@@ -164,4 +188,21 @@ fn test_decode() {
 
     // Then
     assert_eq!(decoded, corpus);
+}
+
+#[test]
+fn test_vocabulary() {
+    // Given
+    let corpus = "foo bar baz";
+    let encoder = BytePairEncoder::train(corpus, 1);
+
+    // When
+    let vocab = encoder.vocabulary();
+
+    // Then
+    // Vocabulary should contain all 256 base bytes plus 1 merged token
+    assert_eq!(vocab.len(), 257);
+    assert_eq!(vocab.get(&102u16), Some(vec![b'f'].as_ref()));
+    // The merged token 256 should be "ba" (most frequent pair)
+    assert_eq!(vocab.get(&256u16), Some(vec![b'b', b'a'].as_ref()));
 }
