@@ -55,7 +55,7 @@ impl Tokenizer {
 
         let mut tokenizer: Tokenizer = Tokenizer::from_bytes();
         // initial tokenizer vocab has 256 ids
-        let mut next_token_id: u16= 256;
+        let mut next_token_id: u16 = 256;
         // iterate merge rules in rank order
         for (pair, token_id) in &merge_rules {
             if !tokenizer.vocabulary.contains(&pair.0) || !tokenizer.vocabulary.contains(&pair.1) {
@@ -64,7 +64,9 @@ impl Tokenizer {
                     pair.0, pair.1, token_id
                 );
             }
-            tokenizer.vocabulary.insert(Token::from_pair(&next_token_id, pair));
+            tokenizer
+                .vocabulary
+                .insert(Token::from_pair(&next_token_id, pair));
             next_token_id += 1;
         }
         tokenizer
@@ -87,7 +89,8 @@ impl Tokenizer {
 }
 #[derive(PartialEq, Debug)]
 pub struct BytePairEncoder {
-    pub merge_rules: Vec<((Token, Token), u16)>, // (pair, merged_id)
+    pub merge_rules: Vec<((Token, Token), u16)>,
+    // (pair, merged_id), the rank of the merge rule is defind by its pos in the vector
 }
 
 impl BytePairEncoder {
@@ -114,7 +117,7 @@ impl BytePairEncoder {
     }
 
     pub fn train(corpus: &str, num_merges: u8) -> BytePairEncoder {
-        let mut tokens: Vec<Token> = corpus
+        let corpus_tokens: Vec<Token> = corpus
             .as_bytes()
             .iter()
             .map(|&b| Token::from_byte(b))
@@ -123,15 +126,15 @@ impl BytePairEncoder {
         let mut merge_rules: Vec<((Token, Token), u16)> = vec![];
         let mut next_token_id: u16 = 256;
 
-        (0..num_merges).for_each(|i| {
+        (0..num_merges).for_each(|_| {
             // if not a single pair can be found then exit early
             // e.g. corpus "a"
-            if tokens.len() <= 1 {
+            if corpus_tokens.len() <= 1 {
                 return;
             }
             let mut pair_frequencies: HashMap<(Token, Token), i32> = HashMap::new();
-            (0..tokens.len() - 1).for_each(|j| {
-                let pair = (tokens[j].clone(), tokens[j + 1].clone());
+            (0..corpus_tokens.len() - 1).for_each(|j| {
+                let pair = (corpus_tokens[j].clone(), corpus_tokens[j + 1].clone());
                 let count = pair_frequencies.get(&pair).unwrap_or(&0) + 1;
                 pair_frequencies.insert(pair, count);
             });
@@ -142,9 +145,7 @@ impl BytePairEncoder {
                 .map(|(k, _)| k.clone())
                 .unwrap();
 
-            merge_rules.push((most_frequent_pair.clone(), i as u16));
-            tokens = replace_pair(&tokens, &most_frequent_pair, &next_token_id);
-
+            merge_rules.push((most_frequent_pair.clone(), next_token_id));
             next_token_id += 1;
         });
 
@@ -258,5 +259,9 @@ fn test_vocabulary() {
     // Vocabulary should contain all 256 base bytes plus 1 merged token
     assert_eq!(tokenizer.vocabulary.len(), 257);
     assert!(tokenizer.vocabulary.contains(&Token::from_byte(b'f')));
-    assert!(tokenizer.vocabulary.contains(&Token::new(256, vec![b'b', b'a'])));
+    assert!(
+        tokenizer
+            .vocabulary
+            .contains(&Token::new(256, vec![b'b', b'a']))
+    );
 }
