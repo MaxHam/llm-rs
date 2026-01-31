@@ -6,13 +6,13 @@ use std::{
 type Utf8Byte = u8;
 
 #[derive(Eq, Ord, PartialEq, PartialOrd, Hash, Debug, Clone)]
-struct Token {
+pub struct Token {
     id: u16,
     value: Vec<Utf8Byte>,
 }
 
 impl Token {
-    fn new(id: u16, value: Vec<u8>) -> Token {
+    fn new(id: u16, value: Vec<Utf8Byte>) -> Token {
         Token { id, value }
     }
     fn from_pair(id: &u16, pair: &(Token, Token)) -> Token {
@@ -24,7 +24,7 @@ impl Token {
             value: new_bytes,
         }
     }
-    fn from_byte(byte: u8) -> Token {
+    fn from_byte(byte: Utf8Byte) -> Token {
         Token {
             id: byte as u16,
             value: vec![byte],
@@ -37,9 +37,54 @@ impl Token {
     }
 }
 
+pub struct Vocabulary {
+    pub tokens: HashSet<Token>,
+}
+
+impl Vocabulary {
+    fn from_bytes() -> Vocabulary {
+        // init a vocab from the given u8 bytes
+        let tokens: HashSet<Token> = (0u8..=255u8).map(Token::from_byte).collect();
+        Vocabulary { tokens }
+    }
+
+    pub fn from_merges(merge_rules: Vec<((Token, Token), u16)>) -> Vocabulary {
+        if merge_rules.is_empty() {
+            panic!("You need to train the byte pair encoder before you can get a vocabulary.");
+        }
+
+        let mut vocab: Vocabulary = Vocabulary::from_bytes();
+        // iterate merge rules in rank order
+        for (pair, token_id) in &merge_rules {
+            if !vocab.tokens.contains(&pair.0) || !vocab.tokens.contains(&pair.1) {
+                panic!(
+                    "Token pair ({:?}, {:?}) not both present in vocabulary when applying merge rule for token_id {}.",
+                    pair.0, pair.1, token_id
+                );
+            }
+            vocab.tokens.insert(Token::from_pair(token_id, pair));
+        }
+        vocab
+    }
+
+    pub fn to_json(&self) {
+        // Map token ids to decoded UTF-8 strings for readable JSON
+        let vocab_strings: HashMap<u16, String> = self
+            .tokens
+            .iter()
+            .map(|token| match String::from_utf8(token.value.clone()) {
+                Ok(s) => (token.id, s),
+                Err(_) => (token.id, "UNKNOWN".to_string()),
+            })
+            .collect();
+
+        let json = serde_json::to_string_pretty(&vocab_strings).expect("Failed to serialize vocab");
+        std::fs::write("vocab.json", json).expect("Failed to write vocab.json");
+    }
+}
 #[derive(PartialEq, Debug)]
 pub struct BytePairEncoder {
-    merge_rules: Vec<((Token, Token), u16)>, // (pair, merged_id)
+    pub merge_rules: Vec<((Token, Token), u16)>, // (pair, merged_id)
 }
 
 impl BytePairEncoder {
@@ -57,7 +102,6 @@ impl BytePairEncoder {
         for (pair, token_id) in self.merge_rules.iter().rev() {
             target_tokens = expand_token(target_tokens, pair.clone(), *token_id);
         }
-        // Convert u16 tokens back to bytes and then to string
         let bytes = target_tokens
             .iter()
             .map(|t| t.to_utf8_bytes())
@@ -73,7 +117,7 @@ impl BytePairEncoder {
             .map(|&b| Token::from_byte(b))
             .collect();
 
-        let mut vocab: HashSet<Token> = (0u8..=255u8).map(Token::from_byte).collect();
+        let mut vocab: Vocabulary = Vocabulary::from_bytes();
         let mut merge_rules: Vec<((Token, Token), u16)> = vec![];
         let mut next_token_id: u16 = 256;
 
@@ -97,46 +141,16 @@ impl BytePairEncoder {
                 .unwrap();
 
             merge_rules.push((most_frequent_pair.clone(), next_token_id));
-            vocab.insert(Token::from_pair(&next_token_id, &most_frequent_pair));
+            vocab
+                .tokens
+                .insert(Token::from_pair(&next_token_id, &most_frequent_pair));
 
             tokens = replace_pair(&tokens, &most_frequent_pair, &next_token_id);
 
             next_token_id += 1;
         });
 
-        BytePairEncoder {
-            merge_rules,
-        }
-    }
-
-    pub fn vocabulary(&self) -> HashMap<u16, Vec<Utf8Byte>> {
-        if self.merge_rules.is_empty() {
-            panic!("You need to train the byte pair encoder before you can get a vocabulary.");
-        }
-
-        // Prefill vocab: each u16 in 0..=255 is mapped to its corresponding Token
-        let mut vocab: HashMap<u16, Token> = (0u8..=255u8)
-            .map(|b| {
-                let t = Token::from_byte(b);
-                (t.id, t)
-            })
-            .collect();
-
-        // For each merge, create the bytes representation by concatenating its parts
-        for (pair, token_id) in &self.merge_rules {
-            if let Some(_) = vocab.get(&pair.0.id) {
-                if let Some(_) = vocab.get(&pair.1.id) {
-                    vocab.insert(*token_id, Token::from_pair(token_id, pair));
-                }
-            }
-        }
-
-
-        // return just the value
-        vocab
-            .iter()
-            .map(|(k, v)| (*k, v.value.clone()))
-            .collect()
+        BytePairEncoder { merge_rules }
     }
 }
 
@@ -240,12 +254,11 @@ fn test_vocabulary() {
     let encoder = BytePairEncoder::train(corpus, 1);
 
     // When
-    let vocab = encoder.vocabulary();
+    let vocab = Vocabulary::from_merges(encoder.merge_rules);
 
     // Then
     // Vocabulary should contain all 256 base bytes plus 1 merged token
-    assert_eq!(vocab.len(), 257);
-    assert_eq!(vocab.get(&102u16), Some(vec![b'f'].as_ref()));
-    // The merged token 256 should be "ba" (most frequent pair)
-    assert_eq!(vocab.get(&256u16), Some(vec![b'b', b'a'].as_ref()));
+    assert_eq!(vocab.tokens.len(), 257);
+    assert!(vocab.tokens.contains(&Token::from_byte(b'f')));
+    assert!(vocab.tokens.contains(&Token::new(256, vec![b'b', b'a'])));
 }
