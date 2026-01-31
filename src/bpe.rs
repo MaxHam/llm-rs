@@ -37,15 +37,21 @@ impl Token {
     }
 }
 
+#[derive(PartialEq, Debug)]
 pub struct Tokenizer {
     pub vocabulary: HashSet<Token>,
+    merge_rules: Vec<((Token, Token), u16)>,
+    // (pair, merged_id), the rank of the merge rule is defind by its pos in the vector
 }
 
 impl Tokenizer {
     fn from_bytes() -> Tokenizer {
         // init a vocab from the given u8 bytes
         let tokens: HashSet<Token> = (0u8..=255u8).map(Token::from_byte).collect();
-        Tokenizer { vocabulary: tokens }
+        Tokenizer {
+            vocabulary: tokens,
+            merge_rules: vec![],
+        }
     }
 
     pub fn from_merges(merge_rules: Vec<((Token, Token), u16)>) -> Tokenizer {
@@ -86,14 +92,7 @@ impl Tokenizer {
         let json = serde_json::to_string_pretty(&vocab_strings).expect("Failed to serialize vocab");
         std::fs::write("vocab.json", json).expect("Failed to write vocab.json");
     }
-}
-#[derive(PartialEq, Debug)]
-pub struct BytePairEncoder {
-    pub merge_rules: Vec<((Token, Token), u16)>,
-    // (pair, merged_id), the rank of the merge rule is defind by its pos in the vector
-}
 
-impl BytePairEncoder {
     fn encode(&self, text: &str) -> Vec<Token> {
         let mut tokens: Vec<Token> = text.bytes().map(Token::from_byte).collect();
         for (pair, token_id) in &self.merge_rules {
@@ -115,8 +114,15 @@ impl BytePairEncoder {
             .collect();
         String::from_utf8(bytes).unwrap()
     }
+}
+#[derive(PartialEq, Debug)]
+pub struct BytePairEncoder {
+    pub merge_rules: Vec<((Token, Token), u16)>,
+    // (pair, merged_id), the rank of the merge rule is defind by its pos in the vector
+}
 
-    pub fn train(corpus: &str, num_merges: u8) -> BytePairEncoder {
+impl BytePairEncoder {
+    pub fn train(corpus: &str, num_merges: u8) -> Tokenizer {
         let corpus_tokens: Vec<Token> = corpus
             .as_bytes()
             .iter()
@@ -149,7 +155,11 @@ impl BytePairEncoder {
             next_token_id += 1;
         });
 
-        BytePairEncoder { merge_rules }
+        if merge_rules.is_empty() {
+            Tokenizer::from_bytes()
+        } else {
+            Tokenizer::from_merges(merge_rules)
+        }
     }
 }
 
@@ -189,15 +199,11 @@ fn test_train() {
     let corpus = "foo bar baz";
 
     // When
-    let encoder = BytePairEncoder::train(corpus, 1);
+    let tokenizer = BytePairEncoder::train(corpus, 1);
 
     // Then
-    assert_eq!(
-        encoder,
-        BytePairEncoder {
-            merge_rules: vec![(((Token::from_byte(b'b'), Token::from_byte(b'a')), 0))],
-        }
-    );
+    let merged_token = Token::from_pair(&256, &(Token::from_byte(b'b'), Token::from_byte(b'a')));
+    assert!(tokenizer.vocabulary.contains(&merged_token));
 }
 
 #[test]
@@ -206,14 +212,12 @@ fn test_train_single_byte_corpus() {
     let corpus = "a";
 
     // When
-    let rule = BytePairEncoder::train(corpus, 1);
+    let tokenizer = BytePairEncoder::train(corpus, 1);
 
     // Then
     assert_eq!(
-        rule,
-        BytePairEncoder {
-            merge_rules: vec![],
-        }
+        tokenizer,
+        Tokenizer::from_bytes()
     );
 }
 
@@ -250,18 +254,15 @@ fn test_decode() {
 fn test_vocabulary() {
     // Given
     let corpus = "foo bar baz";
-    let encoder = BytePairEncoder::train(corpus, 1);
-
+    
     // When
-    let tokenizer = Tokenizer::from_merges(encoder.merge_rules);
+    let tokenizer = BytePairEncoder::train(corpus, 1);
 
     // Then
     // Vocabulary should contain all 256 base bytes plus 1 merged token
     assert_eq!(tokenizer.vocabulary.len(), 257);
     assert!(tokenizer.vocabulary.contains(&Token::from_byte(b'f')));
-    assert!(
-        tokenizer
-            .vocabulary
-            .contains(&Token::new(256, vec![b'b', b'a']))
-    );
+    assert!(tokenizer
+        .vocabulary
+        .contains(&Token::new(256, vec![b'b', b'a'])));
 }
