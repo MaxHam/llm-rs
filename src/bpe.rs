@@ -60,8 +60,6 @@ impl Tokenizer {
         }
 
         let mut tokenizer: Tokenizer = Tokenizer::from_bytes();
-        // initial tokenizer vocab has 256 ids
-        let mut next_token_id: u16 = 256;
         // iterate merge rules in rank order
         for (pair, token_id) in &merge_rules {
             if !tokenizer.vocabulary.contains(&pair.0) || !tokenizer.vocabulary.contains(&pair.1) {
@@ -72,9 +70,9 @@ impl Tokenizer {
             }
             tokenizer
                 .vocabulary
-                .insert(Token::from_pair(&next_token_id, pair));
-            next_token_id += 1;
+                .insert(Token::from_pair(token_id, pair));
         }
+        tokenizer.merge_rules = merge_rules;
         tokenizer
     }
 
@@ -122,7 +120,7 @@ pub struct BytePairEncoder {
 
 impl BytePairEncoder {
     pub fn train(corpus: &str, num_merges: u8) -> Tokenizer {
-        let corpus_tokens: Vec<Token> = corpus
+        let mut corpus_tokens: Vec<Token> = corpus
             .as_bytes()
             .iter()
             .map(|&b| Token::from_byte(b))
@@ -153,6 +151,9 @@ impl BytePairEncoder {
                 .unwrap();
 
             merge_rules.push((most_frequent_pair.clone(), next_token_id));
+            
+            corpus_tokens = replace_pair(&corpus_tokens, &most_frequent_pair, &next_token_id);
+            
             next_token_id += 1;
         }
 
