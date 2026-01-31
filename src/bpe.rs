@@ -40,7 +40,6 @@ impl Token {
 #[derive(PartialEq, Debug)]
 pub struct BytePairEncoder {
     merge_rules: Vec<((Token, Token), u16)>, // (pair, merged_id)
-    vocab_size: usize,                       // 256 + num_merges
 }
 
 impl BytePairEncoder {
@@ -107,7 +106,6 @@ impl BytePairEncoder {
 
         BytePairEncoder {
             merge_rules,
-            vocab_size: vocab.len(),
         }
     }
 
@@ -185,7 +183,6 @@ fn test_train() {
         encoder,
         BytePairEncoder {
             merge_rules: vec![(((Token::from_byte(b'b'), Token::from_byte(b'a')), 256u16))],
-            vocab_size: 257
         }
     );
 }
@@ -203,7 +200,6 @@ fn test_train_single_byte_corpus() {
         rule,
         BytePairEncoder {
             merge_rules: vec![],
-            vocab_size: 256
         }
     );
 }
