@@ -119,7 +119,12 @@ pub struct BytePairEncoder {
 }
 
 impl BytePairEncoder {
-    pub fn train(corpus: &str, num_merges: u8) -> Tokenizer {
+    pub fn train(corpus: &str, vocab_size: u16) -> Tokenizer {
+
+        if vocab_size <= 256 {
+            panic!("Vocabulary must need to be greater than 256 tokens otherwise no training is possible.")
+        }
+        let num_merges = vocab_size - 256;
         let mut corpus_tokens: Vec<Token> = corpus
             .as_bytes()
             .iter()
@@ -208,7 +213,7 @@ mod tests {
         let corpus = "foo bar baz";
 
         // When
-        let tokenizer = BytePairEncoder::train(corpus, 1);
+        let tokenizer = BytePairEncoder::train(corpus, 257);
 
         // Then
         let merged_token =
@@ -216,13 +221,25 @@ mod tests {
         assert!(tokenizer.vocabulary.contains(&merged_token));
     }
 
+
+    #[test]
+    #[should_panic]
+    fn test_train_too_little_vocab_size() {
+        // Given
+        let corpus = "foo bar baz";
+
+        // When
+        BytePairEncoder::train(corpus, 1);
+
+        // Then panic
+    }
     #[test]
     fn test_train_single_byte_corpus() {
         // Given
         let corpus = "a";
 
         // When
-        let tokenizer = BytePairEncoder::train(corpus, 1);
+        let tokenizer = BytePairEncoder::train(corpus, 257);
 
         // Then
         assert_eq!(tokenizer, Tokenizer::from_bytes());
@@ -232,7 +249,7 @@ mod tests {
     fn test_encode() {
         // Given
         let corpus = "foo bar baz";
-        let encoder = BytePairEncoder::train(corpus, 1);
+        let encoder = BytePairEncoder::train(corpus, 257);
         let text = "foo bar baz"; // Use the same corpus to ensure merge rules apply
 
         // When
@@ -247,7 +264,7 @@ mod tests {
     fn test_decode() {
         // Given
         let corpus = "foo bar baz";
-        let encoder = BytePairEncoder::train(corpus, 1);
+        let encoder = BytePairEncoder::train(corpus, 257);
 
         // When
         let encoded = encoder.encode(corpus);
@@ -263,7 +280,7 @@ mod tests {
         let corpus = "foo bar baz";
 
         // When
-        let tokenizer = BytePairEncoder::train(corpus, 1);
+        let tokenizer = BytePairEncoder::train(corpus, 257);
 
         // Then
         // Vocabulary should contain all 256 base bytes plus 1 merged token
@@ -281,7 +298,7 @@ mod tests {
         // Given
         let path = Path::new("test_corpus.txt");
         let corpus = read_to_string(path).expect("Failed to read corpus file");
-        let tokenizer = BytePairEncoder::train(corpus.as_str(), 3);
+        let tokenizer = BytePairEncoder::train(corpus.as_str(), 259);
 
         // When
         let encoded = tokenizer.encode("Hi World!");
