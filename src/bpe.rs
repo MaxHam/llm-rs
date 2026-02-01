@@ -145,7 +145,7 @@ impl BytePairEncoder {
 
         // store the counts of pairs in a heap
         // allows us to get the most frequent pair with O(1)
-        let mut heap: BinaryHeap<(usize, (u16, u16))> = BinaryHeap::new();
+        let mut heap: BinaryHeap<(usize, (u16, u16))> = BinaryHeap::with_capacity(pair_counts.len());
         for (pair, count) in &pair_counts {
             heap.push((*count, *pair));
         }
