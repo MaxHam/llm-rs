@@ -131,7 +131,7 @@ impl BytePairEncoder {
             .map(|&b| Token::from_byte(b))
             .collect();
 
-        let mut merge_rules: Vec<((Token, Token), u16)> = vec![];
+        let mut merge_rules: Vec<((Token, Token), u16)> = Vec::with_capacity(num_merges.into());
         let mut next_token_id: u16 = 256;
 
         for (i, _) in (0..num_merges).enumerate() {
@@ -171,7 +171,7 @@ impl BytePairEncoder {
 }
 
 fn replace_pair(tokens: &[Token], pair: &(Token, Token), token_id: &u16) -> Vec<Token> {
-    let mut result: Vec<Token> = vec![];
+    let mut result: Vec<Token> = Vec::with_capacity(tokens.len());
     let mut i = 0;
     while i < tokens.len() {
         if i < tokens.len() - 1 && tokens[i] == pair.0 && tokens[i + 1] == pair.1 {
