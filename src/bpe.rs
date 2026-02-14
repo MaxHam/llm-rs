@@ -226,11 +226,10 @@ fn apply_merge(
             } else {
                 None
             };
-            if let Some(lp) = left_pair {
-                if prev_merged_right_pair != Some(lp) {
+            if let Some(lp) = left_pair
+                && prev_merged_right_pair != Some(lp) {
                     decrement_pair(pair_counts, lp);
                 }
-            }
             let right_pair = if i + 2 < tokens.len() {
                 Some((tokens[i + 1], tokens[i + 2]))
             } else {

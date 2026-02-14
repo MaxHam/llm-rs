@@ -1,5 +1,5 @@
-use candle_core::{DType, Device, IndexOp, Result, Shape, Tensor};
-use candle_nn::{Embedding, Linear, Module, VarBuilder};
+use candle_core::{DType, Device, IndexOp, Result, Tensor};
+use candle_nn::{Embedding, Linear, Module};
 
 use crate::bpe::{Token, Tokenizer};
 
@@ -30,15 +30,15 @@ pub struct Transformer<'a> {
 }
 
 trait CustomTokenizer {
-    fn from_tokens(tokens: &Vec<Token>, device: &Device) -> Result<Tensor>;
+    fn from_tokens(tokens: &[Token], device: &Device) -> Result<Tensor>;
 }
 
 impl CustomTokenizer for Tensor {
-    fn from_tokens(tokens: &Vec<Token>, device: &Device) -> Result<Tensor> {
+    fn from_tokens(tokens: &[Token], device: &Device) -> Result<Tensor> {
         Tensor::from_vec(
             tokens.iter().map(|t| t.id as u32).collect::<Vec<u32>>(),
             (1, tokens.len()),
-            &device,
+            device,
         )
     }
 }
@@ -75,7 +75,7 @@ impl<'a> Transformer<'a> {
         assert!(seq_len <= self.config.max_seq_len, "sequence length exceeds block size");
     
         let tok = self.tok_emb.forward(idx)?;
-        let pos_idx = Tensor::arange(0u32, seq_len as u32, &idx.device())?.unsqueeze(0)?;
+        let pos_idx = Tensor::arange(0u32, seq_len as u32, idx.device())?.unsqueeze(0)?;
         let pos = self.pos_emb.forward(&pos_idx)?;
         
         let x = (tok + pos)?;
@@ -92,10 +92,10 @@ impl<'a> Transformer<'a> {
         // (B*T, V)
 
         let (batch, tokens) = idx.dims2()?;
-        let logits = logits2d.reshape((batch, tokens, self.config.vocab_size));
+        
         // (B, T, V)
 
-        logits
+        logits2d.reshape((batch, tokens, self.config.vocab_size))
     }
 
     pub fn generate(
@@ -106,7 +106,7 @@ impl<'a> Transformer<'a> {
     ) -> Result<String> {
         let device = &self.config.device;
         let mut tokens = tokenizer.encode(prompt);
-        let mut input = Tensor::from_tokens(&tokens, &device)?;
+        let mut input = Tensor::from_tokens(&tokens, device)?;
 
         for _ in 0..max_new_tokens {
             let logits = self.forward(&input)?;
