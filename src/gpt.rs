@@ -48,12 +48,14 @@ impl<'a> Transformer<'a> {
         // random initial weights
         let device = &config.device;
 
-        let tok_emb_weights = Tensor::randn(0.5, 0.1f32, (config.vocab_size, config.n_embd), device)?;
+        let tok_emb_weights =
+            Tensor::randn(0.5, 0.1f32, (config.vocab_size, config.n_embd), device)?;
         let tok_emb = Embedding::new(tok_emb_weights, config.n_embd);
 
-        let pos_emb_weights = Tensor::randn(0.5, 0.1f32, (config.max_seq_len, config.n_embd), device)?;
+        let pos_emb_weights =
+            Tensor::randn(0.5, 0.1f32, (config.max_seq_len, config.n_embd), device)?;
         let pos_emb = Embedding::new(pos_emb_weights, config.n_embd);
-    
+
         // weight tying, we reuse the token embedding for the lm_head
         // TODO: find out whether we can reuse the actual tensor and not just clone it, for efficiency sake
         let lm_head = Linear::new(tok_emb.embeddings().clone(), None);
@@ -71,16 +73,20 @@ impl<'a> Transformer<'a> {
         // representation = meaning(token emb) + location(position emb)
         //
         // I moved this part of the forward step here only to not clutter the main loop
-        let (batch, seq_len) = idx.dims2()?; 
-        assert!(seq_len <= self.config.max_seq_len, "sequence length exceeds max sequence length of {}", self.config.max_seq_len);
-    
+        let (batch, seq_len) = idx.dims2()?;
+        assert!(
+            seq_len <= self.config.max_seq_len,
+            "sequence length exceeds max sequence length of {}",
+            self.config.max_seq_len
+        );
+
         let tok = self.tok_emb.forward(idx)?;
         let pos_idx = Tensor::arange(0u32, seq_len as u32, idx.device())?.unsqueeze(0)?;
         let pos = self.pos_emb.forward(&pos_idx)?;
-        
+
         let x = (tok + pos)?;
         let x2d = x.reshape((batch * seq_len, self.config.n_embd))?;
-    
+
         Ok(x2d)
     }
 
@@ -92,7 +98,7 @@ impl<'a> Transformer<'a> {
         // (B*T, V)
 
         let (batch, tokens) = idx.dims2()?;
-        
+
         // (B, T, V)
 
         logits2d.reshape((batch, tokens, self.config.vocab_size))
