@@ -49,11 +49,11 @@ impl<'a> Transformer<'a> {
         let device = &config.device;
 
         let tok_emb_weights =
-            Tensor::randn(0.5, 0.1f32, (config.vocab_size, config.n_embd), device)?;
+            Tensor::randn(0.5, 0.25f32, (config.vocab_size, config.n_embd), device)?;
         let tok_emb = Embedding::new(tok_emb_weights, config.n_embd);
 
         let pos_emb_weights =
-            Tensor::randn(0.5, 0.1f32, (config.max_seq_len, config.n_embd), device)?;
+            Tensor::randn(0.5, 0.33f32, (config.max_seq_len, config.n_embd), device)?;
         let pos_emb = Embedding::new(pos_emb_weights, config.n_embd);
 
         // weight tying, we reuse the token embedding for the lm_head
