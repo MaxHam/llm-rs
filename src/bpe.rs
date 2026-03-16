@@ -4,7 +4,7 @@ use std::{
     vec,
 };
 
-use candle_core::{Device, Tensor, Result as CnResult};
+use candle_core::{Device, Result as CnResult, Tensor};
 
 type Utf8Byte = u8;
 
@@ -348,29 +348,32 @@ impl TokenTranslation for Tensor {
     fn from_tokens(tokens: &[Token], device: &Device) -> CnResult<Tensor> {
         Tensor::from_vec(
             tokens.iter().map(|t| t.id as u32).collect::<Vec<u32>>(),
-            (1, tokens.len()),
+            tokens.len(),
             device,
         )
     }
     fn to_tokens(&self, tokenizer: &Tokenizer) -> Vec<Token> {
         // remove batch dimension if present
         let flat = self.flatten_all().unwrap();
-    
+
         // convert tensor -> Vec<u32>
         let ids: Vec<u32> = flat.to_vec1().unwrap();
-    
+
         let mut tokens = Vec::with_capacity(ids.len());
-    
-        for id in ids {
-            let token = tokenizer
-                .vocabulary
-                .get(&(id as u16))
-                .cloned()
-                .expect("Token not found");
-    
-            tokens.push(token);
+
+        let mut missing_ids = Vec::new();
+
+        for &id in &ids {
+            match tokenizer.vocabulary.get(&(id as u16)) {
+                Some(token) => tokens.push(token.clone()),
+                None => missing_ids.push(id),
+            }
         }
-    
+
+        if !missing_ids.is_empty() {
+            panic!("Token(s) not found in vocabulary: {:?}", missing_ids);
+        }
+
         tokens
     }
 }
@@ -381,7 +384,7 @@ mod tests {
 
     use candle_core::{Device, Tensor};
 
-    use crate::bpe::{Token, Tokenizer, TokenTranslation};
+    use crate::bpe::{Token, TokenTranslation, Tokenizer};
 
     #[test]
     fn test_train() {
@@ -517,6 +520,6 @@ mod tests {
 
         // Then it should create 7 tokens since no merges happened
         let num_tokens = input.shape().dims();
-        assert_eq!(num_tokens, &[1, 3]);
+        assert_eq!(num_tokens, &[3]);
     }
 }

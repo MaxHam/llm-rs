@@ -1,6 +1,8 @@
-use candle_core::{Device, Error, IndexOp, Result, Tensor};
-use candle_nn::{Embedding, Module, ops};
+use candle_core::{DType, Device, Error, IndexOp, Result, Shape, Tensor};
+use candle_nn::{AdamW, Embedding, Module, Optimizer, ParamsAdamW, VarBuilder, VarMap, loss, ops};
 use rand::{distr::{Distribution, weighted::WeightedIndex}, rngs::ThreadRng};
+
+use crate::dataset::Dataset;
 
 pub fn sample_multinomial(rng: &mut ThreadRng, prs: &Vec<f32>) -> candle_core::Result<u32> {
     let distribution = WeightedIndex::new(prs).map_err(Error::wrap)?;
@@ -19,15 +21,44 @@ pub fn sample_multinomial(rng: &mut ThreadRng, prs: &Vec<f32>) -> candle_core::R
 /// ignoring any earlier context. This is a simple form of a Markov model for sequences.
 pub struct Bigram {
     tok_emb: Embedding,
-    rng: ThreadRng
+    vocab_size: usize,
+    rng: ThreadRng,
+    var_map: VarMap
 }
 
 impl Bigram {
     pub fn new(vocab_size: usize, device: &Device) -> Result<Self> {
-        let tok_emb_weights = Tensor::randn(0.0, 0.02f32, (vocab_size, vocab_size), &device)?;
-        let tok_emb = Embedding::new(tok_emb_weights, vocab_size);
-        let mut rng = rand::rng();
-        Ok(Self { tok_emb, rng})
+        let var_map = VarMap::new();
+        let var_builder = VarBuilder::from_varmap(&var_map, DType::F32, device);
+        let embeddings = var_builder
+        .get((vocab_size, vocab_size), "embeddings")
+        .unwrap();
+        let tok_emb = Embedding::new(embeddings, vocab_size);
+        let rng = rand::rng();
+        Ok(Self { tok_emb, vocab_size, rng, var_map})
+    }
+
+    pub fn train(&self, dataset: &mut Dataset, num_epochs: usize, batch_size: usize) -> Result<()> {
+        let mut optimizer = AdamW::new(self.var_map.all_vars(), ParamsAdamW::default())?;
+
+        for epoch in 0..num_epochs {
+            let (training_inputs, training_targets) =
+                dataset.random_training_batch(self.vocab_size, batch_size)?;
+            let logits = self.forward(&training_inputs)?;
+            let (batch_size, time_size, channel_size) = logits.shape().dims3()?;
+            let loss = loss::cross_entropy(
+                &logits.reshape(Shape::from((batch_size * time_size, channel_size)))?,
+                &training_targets.reshape(Shape::from((batch_size * time_size,)))?,
+            )?;
+            optimizer.backward_step(&loss)?;
+
+            println!(
+                "Epoch: {epoch:3} Train loss: {:8.5}",
+                loss.to_scalar::<f32>()?
+            );
+        }
+
+        Ok(())
     }
 
     pub fn generate(&mut self, mut idx: Tensor, max_new_tokens: usize) -> Result<Tensor> {
@@ -58,16 +89,13 @@ impl Module for Bigram {
 mod tests {
     use super::*;
     use candle_core::{Device, Result, Tensor};
-    use candle_nn::Embedding;
 
     #[test]
     fn test_forward_shape() -> Result<()> {
         // Given
         let device = Device::Cpu;
         let vocab_size = 5;
-        let emb_weights = Tensor::randn(0.0f32, 0.02, (vocab_size, vocab_size), &device)?;
-        let tok_emb = Embedding::new(emb_weights, vocab_size);
-        let model = Bigram { tok_emb, rng: rand::rng() };
+        let model = Bigram::new(vocab_size, &device)?;
         let idx = Tensor::from_slice(&[0u32, 1, 2], &[3], &device)?; // seq_len=3
 
         // When

@@ -1,7 +1,7 @@
 use candle_core::{DType, Device, IndexOp, Result, Tensor};
 use candle_nn::{Embedding, LayerNorm, Linear, Module, ops::softmax};
 
-use crate::bpe::{Token, TokenTranslation, Tokenizer};
+use crate::bpe::{TokenTranslation, Tokenizer};
 
 #[derive(Clone)]
 pub struct GPTConfig {
@@ -201,6 +201,7 @@ impl<'a> Transformer<'a> {
         let device = &self.config.device;
         let mut tokens = tokenizer.encode(prompt);
         let mut input = Tensor::from_tokens(&tokens, device)?;
+        input = input.unsqueeze(0)?; // convert to (1,S)
 
         for _ in 0..max_new_tokens {
             let logits = self.forward(&input)?;
@@ -221,6 +222,7 @@ impl<'a> Transformer<'a> {
             // Add generated token to input and rebuild tensor
             tokens.push(next_token);
             input = Tensor::from_tokens(&tokens, device)?;
+            input = input.unsqueeze(0)?; // convert to (1,S)
         }
 
         Ok(tokenizer.decode(&tokens))

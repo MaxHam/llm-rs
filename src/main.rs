@@ -1,16 +1,35 @@
 use std::io::{self, Write};
 
-use candle_core::{Device, Tensor};
-use llm_rs::gpt::{GPTConfig, Transformer};
-use llm_rs::bigram::{Bigram};
+use candle_core::{Device, IndexOp, Tensor};
+use llm_rs::bigram::Bigram;
 use llm_rs::bpe::{TokenTranslation, Tokenizer};
+use llm_rs::dataset::Dataset;
 
 fn main() -> anyhow::Result<()> {
     let tokenizer = Tokenizer::ascii();
     let device = Device::Cpu;
     // let config = GPTConfig::default(tokenizer.vocabulary.len());
     // let model = Transformer::new(&config)?;
-    let mut model= Bigram::new(tokenizer.vocabulary.len(), &device)?;
+    let mut model = Bigram::new(tokenizer.vocabulary.len(), &device)?;
+    let mut dataset = Dataset::from_file("./data/names.txt", 0.8, &tokenizer)?;
+    println!(
+        "Training data shape: {:?}, dtype: {:?}",
+        dataset.training_data.shape(),
+        dataset.training_data.dtype()
+    );
+    println!(
+        "Validation data shape: {:?}, dtype: {:?}",
+        dataset.validation_data.shape(),
+        dataset.validation_data.dtype()
+    );
+
+    let block_size = 8usize;
+    println!(
+        "First block of training data: {:?}, decoded {:?}",
+        &dataset.training_data.i(0..block_size).unwrap(),
+        tokenizer.decode(&dataset.training_data.i(0..block_size).unwrap().to_tokens(&tokenizer))
+    );
+    let _ = model.train(&mut dataset, 1024, 16);
 
     println!("Chitchat with your GPT");
     println!("Type something and press enter. Ctrl+C to exit.\n");
@@ -27,11 +46,12 @@ fn main() -> anyhow::Result<()> {
         if input.is_empty() {
             continue;
         }
-        let encoded  =  tokenizer.encode(input);
+        let encoded = tokenizer.encode(input);
         let mut input = Tensor::from_tokens(&encoded, &device)?;
-        let output = model.generate(input, 20)?;
+        input = input.unsqueeze(0)?; // add batch back in (1, S)
+
+        let output = model.generate(input, 32)?;
         let decoded = tokenizer.decode(&output.to_tokens(&tokenizer));
-        
 
         println!("{decoded}\n");
     }
