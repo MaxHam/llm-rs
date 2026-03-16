@@ -1,7 +1,7 @@
 use candle_core::{DType, Device, IndexOp, Result, Tensor};
 use candle_nn::{Embedding, LayerNorm, Linear, Module, ops::softmax};
 
-use crate::bpe::{Token, Tokenizer};
+use crate::bpe::{Token, TokenTranslation, Tokenizer};
 
 #[derive(Clone)]
 pub struct GPTConfig {
@@ -128,20 +128,6 @@ pub struct Transformer<'a> {
     pos_emb: Embedding,
     block: Block,
     lm_head: Linear,
-}
-
-trait TokenTranslation {
-    fn from_tokens(tokens: &[Token], device: &Device) -> Result<Tensor>;
-}
-
-impl TokenTranslation for Tensor {
-    fn from_tokens(tokens: &[Token], device: &Device) -> Result<Tensor> {
-        Tensor::from_vec(
-            tokens.iter().map(|t| t.id as u32).collect::<Vec<u32>>(),
-            (1, tokens.len()),
-            device,
-        )
-    }
 }
 
 impl<'a> Transformer<'a> {
@@ -278,21 +264,4 @@ fn test_generate() {
         !output.is_empty(),
         "Input prompt string should not be empty"
     );
-}
-
-#[test]
-fn test_token_to_tensor() {
-    // Given
-    let tokens = vec![
-        Token::from_byte(0),
-        Token::from_byte(1),
-        Token::from_byte(2),
-    ];
-
-    // When
-    let input = Tensor::from_tokens(&tokens, &Device::Cpu).unwrap();
-
-    // Then it should create 7 tokens since no merges happened
-    let num_tokens = input.shape().dims();
-    assert_eq!(num_tokens, &[1, 3]);
 }

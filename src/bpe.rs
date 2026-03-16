@@ -4,6 +4,8 @@ use std::{
     vec,
 };
 
+use candle_core::{Device, Tensor, Result as CnResult};
+
 type Utf8Byte = u8;
 
 #[derive(Eq, Ord, PartialEq, PartialOrd, Hash, Debug, Clone)]
@@ -73,22 +75,36 @@ impl Tokenizer {
 
         let mut tokenizer: Tokenizer = Tokenizer::from_bytes();
 
-        let mut token_merge_rules: Vec<((Token, Token), u16)> = Vec::with_capacity(merge_rules.len());
+        let mut token_merge_rules: Vec<((Token, Token), u16)> =
+            Vec::with_capacity(merge_rules.len());
 
         for ((a, b), token_id) in merge_rules {
-            let token_a = tokenizer.vocabulary
-
+            let token_a = tokenizer
+                .vocabulary
                 .get(&a)
-                .unwrap_or_else(|| panic!("Token id {} not found when building merge rule for id {}", a, token_id))
+                .unwrap_or_else(|| {
+                    panic!(
+                        "Token id {} not found when building merge rule for id {}",
+                        a, token_id
+                    )
+                })
                 .clone();
-            let token_b = tokenizer.vocabulary
+            let token_b = tokenizer
+                .vocabulary
                 .get(&b)
-                .unwrap_or_else(|| panic!("Token id {} not found when building merge rule for id {}", b, token_id))
+                .unwrap_or_else(|| {
+                    panic!(
+                        "Token id {} not found when building merge rule for id {}",
+                        b, token_id
+                    )
+                })
                 .clone();
 
             let pair = (token_a, token_b);
 
-            if !tokenizer.vocabulary.contains_key(&pair.0.id) || !tokenizer.vocabulary.contains_key(&pair.1.id) {
+            if !tokenizer.vocabulary.contains_key(&pair.0.id)
+                || !tokenizer.vocabulary.contains_key(&pair.1.id)
+            {
                 panic!(
                     "Token pair ({:?}, {:?}) not both present in vocabulary when applying merge rule for token_id {}.",
                     pair.0, pair.1, token_id
@@ -109,10 +125,12 @@ impl Tokenizer {
         let vocab_strings: HashMap<&u16, String> = self
             .vocabulary
             .iter()
-            .map(|(token_id,token)| match String::from_utf8(token.value.clone()) {
-                Ok(s) => (token_id, s),
-                Err(_) => (token_id, "UNKNOWN".to_string()),
-            })
+            .map(
+                |(token_id, token)| match String::from_utf8(token.value.clone()) {
+                    Ok(s) => (token_id, s),
+                    Err(_) => (token_id, "UNKNOWN".to_string()),
+                },
+            )
             .collect();
 
         let json = serde_json::to_string_pretty(&vocab_strings).expect("Failed to serialize vocab");
@@ -238,9 +256,10 @@ fn apply_merge(
                 None
             };
             if let Some(lp) = left_pair
-                && prev_merged_right_pair != Some(lp) {
-                    decrement_pair(pair_counts, lp);
-                }
+                && prev_merged_right_pair != Some(lp)
+            {
+                decrement_pair(pair_counts, lp);
+            }
             let right_pair = if i + 2 < tokens.len() {
                 Some((tokens[i + 1], tokens[i + 2]))
             } else {
@@ -320,12 +339,49 @@ fn expand_token(mut tokens: Vec<Token>, pair: (Token, Token), token_id: u16) -> 
     }
     tokens
 }
+pub trait TokenTranslation {
+    fn from_tokens(tokens: &[Token], device: &Device) -> CnResult<Tensor>;
+    fn to_tokens(&self, tokenizer: &Tokenizer) -> Vec<Token>;
+}
+
+impl TokenTranslation for Tensor {
+    fn from_tokens(tokens: &[Token], device: &Device) -> CnResult<Tensor> {
+        Tensor::from_vec(
+            tokens.iter().map(|t| t.id as u32).collect::<Vec<u32>>(),
+            (1, tokens.len()),
+            device,
+        )
+    }
+    fn to_tokens(&self, tokenizer: &Tokenizer) -> Vec<Token> {
+        // remove batch dimension if present
+        let flat = self.flatten_all().unwrap();
+    
+        // convert tensor -> Vec<u32>
+        let ids: Vec<u32> = flat.to_vec1().unwrap();
+    
+        let mut tokens = Vec::with_capacity(ids.len());
+    
+        for id in ids {
+            let token = tokenizer
+                .vocabulary
+                .get(&(id as u16))
+                .cloned()
+                .expect("Token not found");
+    
+            tokens.push(token);
+        }
+    
+        tokens
+    }
+}
 
 #[cfg(test)]
 mod tests {
     use std::{fs::read_to_string, path::Path};
 
-    use crate::bpe::{Token, Tokenizer};
+    use candle_core::{Device, Tensor};
+
+    use crate::bpe::{Token, Tokenizer, TokenTranslation};
 
     #[test]
     fn test_train() {
@@ -404,7 +460,11 @@ mod tests {
         // Then
         // Vocabulary should contain all 256 base bytes plus 1 merged token
         assert_eq!(tokenizer.vocabulary.len(), 257);
-        assert!(tokenizer.vocabulary.contains_key(&Token::from_byte(b'f').id));
+        assert!(
+            tokenizer
+                .vocabulary
+                .contains_key(&Token::from_byte(b'f').id)
+        );
         assert!(
             tokenizer
                 .vocabulary
@@ -412,13 +472,12 @@ mod tests {
         );
     }
 
-
     #[test]
     fn test_no_duplicates_in_vocab() {
         // Given
         let path = Path::new("test_corpus.txt");
         let corpus = read_to_string(path).expect("Failed to read corpus file");
-        
+
         // When
         let tokenizer = Tokenizer::train(corpus.as_str(), 512).unwrap();
 
@@ -442,5 +501,22 @@ mod tests {
 
         // Then
         assert_eq!(decoded, "Hi World!");
+    }
+
+    #[test]
+    fn test_token_to_tensor() {
+        // Given
+        let tokens = vec![
+            Token::from_byte(0),
+            Token::from_byte(1),
+            Token::from_byte(2),
+        ];
+
+        // When
+        let input = Tensor::from_tokens(&tokens, &Device::Cpu).unwrap();
+
+        // Then it should create 7 tokens since no merges happened
+        let num_tokens = input.shape().dims();
+        assert_eq!(num_tokens, &[1, 3]);
     }
 }
