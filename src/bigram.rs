@@ -1,6 +1,9 @@
 use candle_core::{DType, Device, Error, IndexOp, Result, Shape, Tensor};
 use candle_nn::{AdamW, Embedding, Module, Optimizer, ParamsAdamW, VarBuilder, VarMap, loss, ops};
-use rand::{distr::{Distribution, weighted::WeightedIndex}, rngs::ThreadRng};
+use rand::{
+    distr::{Distribution, weighted::WeightedIndex},
+    rngs::ThreadRng,
+};
 
 use crate::dataset::Dataset;
 
@@ -23,23 +26,33 @@ pub struct Bigram {
     tok_emb: Embedding,
     vocab_size: usize,
     rng: ThreadRng,
-    var_map: VarMap
+    var_map: VarMap,
 }
 
 impl Bigram {
     pub fn new(vocab_size: usize, device: &Device) -> Result<Self> {
-        let var_map = VarMap::new();
-        let var_builder = VarBuilder::from_varmap(&var_map, DType::F32, device);
-        let embeddings = var_builder
-        .get((vocab_size, vocab_size), "embeddings")
-        .unwrap();
+        let mut var_map = VarMap::new();
+        let vb = VarBuilder::from_varmap(&mut var_map, DType::F32, device);
+        let embeddings = vb.get((vocab_size, vocab_size), "embeddings")?;
         let tok_emb = Embedding::new(embeddings, vocab_size);
-        let rng = rand::rng();
-        Ok(Self { tok_emb, vocab_size, rng, var_map})
+
+        Ok(Self {
+            tok_emb,
+            vocab_size,
+            rng: rand::rng(),
+            var_map,
+        })
     }
 
     pub fn train(&self, dataset: &mut Dataset, num_epochs: usize, batch_size: usize) -> Result<()> {
-        let mut optimizer = AdamW::new(self.var_map.all_vars(), ParamsAdamW::default())?;
+        let params = ParamsAdamW {
+            lr: 0.1, // set extra high so we can result fast in this toy example
+            beta1: 0.9,
+            beta2: 0.999,
+            eps: 1e-8,
+            weight_decay: 0.0,
+        };
+        let mut optimizer = AdamW::new(self.var_map.all_vars(), params)?;
 
         for epoch in 0..num_epochs {
             let (training_inputs, training_targets) =
@@ -57,22 +70,23 @@ impl Bigram {
                 loss.to_scalar::<f32>()?
             );
         }
-
         Ok(())
     }
 
     pub fn generate(&mut self, mut idx: Tensor, max_new_tokens: usize) -> Result<Tensor> {
+        // Takes in shape (batch, sequence)
+        // Returns in shape (batch, sequence)
+        // input tensor is updated in place
         for _ in 0..max_new_tokens {
-            let logits = self.forward(&idx)?;
+            let logits = self.forward(&idx)?; // (batch, seq_len, vocab)
             let (_, seq_len, _) = logits.dims3()?;
-            let last_logits = logits.i((.., seq_len - 1, ..))?;
-            let probabilities = ops::softmax(&last_logits, 0)?;
-            let probabilities = probabilities.squeeze(0)?;     
+            let last_logits = logits.i((.., seq_len - 1, ..))?; // (batch, vocab)
+            let probabilities = ops::softmax(&last_logits, 1)?; // (128)
+            let probabilities = probabilities.squeeze(0)?;
             let probs_vec = probabilities.to_vec1()?;
             let next_token = sample_multinomial(&mut self.rng, &probs_vec)?;
             // reshape to [1,1]
-            let next_tensor = Tensor::from_slice(&[next_token], &[1, 1], &Device::Cpu)?; 
-            // append to sequence
+            let next_tensor = Tensor::from_slice(&[next_token], &[1, 1], &idx.device())?;
             idx = Tensor::cat(&[&idx, &next_tensor], 1)?;
         }
         Ok(idx)
@@ -96,13 +110,31 @@ mod tests {
         let device = Device::Cpu;
         let vocab_size = 5;
         let model = Bigram::new(vocab_size, &device)?;
-        let idx = Tensor::from_slice(&[0u32, 1, 2], &[3], &device)?; // seq_len=3
+        let idx = Tensor::from_slice(&[0u32, 1, 2], &[1, 3], &device)?; // seq_len=3
 
         // When
         let logits = model.forward(&idx)?;
 
         // Then
-        assert_eq!(logits.shape().dims(), &[3, vocab_size]);
+        assert_eq!(logits.shape().dims(), &[1, 3, vocab_size]);
+
+        Ok(())
+    }
+    #[test]
+    fn test_generate_shape() -> Result<()> {
+        // Given
+        let device = Device::Cpu;
+        let vocab_size = 5;
+        let mut model = Bigram::new(vocab_size, &device)?;
+        let max_new_tokens = 1;
+        let seq_len = 3;
+        let idx = Tensor::from_slice(&[0u32, 1, 2], &[1, 3], &device)?; // seq_len=3
+
+        // When
+        let output_idx = model.generate(idx, 1)?;
+
+        // Then
+        assert_eq!(output_idx.shape().dims(), &[1, seq_len+max_new_tokens]); // (batch, seq_len)
 
         Ok(())
     }

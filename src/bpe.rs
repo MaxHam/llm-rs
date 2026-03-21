@@ -59,7 +59,7 @@ impl Tokenizer {
         // init a vocab from the given 128 ascii bytes
         // this is useful for testing
         let mut tokens: HashMap<u16, Token> = HashMap::new();
-        for id in 0u8..=128u8 {
+        for id in 0u8..=127u8 {
             tokens.insert(id as u16, Token::from_byte(id));
         }
         Tokenizer {

@@ -11,7 +11,7 @@ fn main() -> anyhow::Result<()> {
     // let config = GPTConfig::default(tokenizer.vocabulary.len());
     // let model = Transformer::new(&config)?;
     let mut model = Bigram::new(tokenizer.vocabulary.len(), &device)?;
-    let mut dataset = Dataset::from_file("./data/names.txt", 0.8, &tokenizer)?;
+    let mut dataset = Dataset::from_file("./data/gutenberg_txts/corpus.txt", 0.8, &tokenizer)?;
     println!(
         "Training data shape: {:?}, dtype: {:?}",
         dataset.training_data.shape(),
@@ -29,7 +29,7 @@ fn main() -> anyhow::Result<()> {
         &dataset.training_data.i(0..block_size).unwrap(),
         tokenizer.decode(&dataset.training_data.i(0..block_size).unwrap().to_tokens(&tokenizer))
     );
-    let _ = model.train(&mut dataset, 1024, 16);
+    let _ = model.train(&mut dataset, 128, 64);
 
     println!("Chitchat with your GPT");
     println!("Type something and press enter. Ctrl+C to exit.\n");
