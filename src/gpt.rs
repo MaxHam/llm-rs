@@ -1,26 +1,8 @@
 use candle_core::{DType, Device, IndexOp, Result, Tensor};
-use candle_nn::{Embedding, LayerNorm, Linear, Module, ops::softmax};
+use candle_nn::{Embedding, LayerNorm, Linear, Module, VarBuilder, VarMap, ops::{self, softmax}};
+use rand::rngs::ThreadRng;
 
-use crate::bpe::{TokenTranslation, Tokenizer};
-
-#[derive(Clone)]
-pub struct GPTConfig {
-    vocab_size: usize,
-    max_seq_len: usize,
-    n_embd: usize,
-    device: Device,
-}
-
-impl GPTConfig {
-    pub fn default(vocab_size: usize) -> GPTConfig {
-        GPTConfig {
-            vocab_size,
-            max_seq_len: 512,
-            n_embd: 32,
-            device: Device::Cpu,
-        }
-    }
-}
+use crate::sampling::sample_multinomial;
 
 #[derive(Clone)]
 struct SelfAttention {
@@ -70,10 +52,13 @@ impl SelfAttention {
         let mask = row.ge(&col)?.to_dtype(DType::F32)?;
         let mask = mask.unsqueeze(0)?; // (t, t) -> (1, t, t) to match scores (b, t, t)
 
-        let neg_inf = Tensor::full(f32::NEG_INFINITY, (b, t, t), device)?;
+        // Large negative constant for masked positions. Do not use -inf here:
+        // `0 * (-inf)` is NaN (IEEE 754), and zero_mask is 0 on allowed cells, which
+        // would poison the whole scores tensor before softmax.
+        let neg_large = Tensor::full(-1e9f32, (b, t, t), device)?;
 
         let zero_mask = (mask.eq(0)?).to_dtype(DType::F32)?;
-        scores = ((scores * mask)? + (neg_inf * zero_mask)?)?;
+        scores = ((scores * mask)? + (neg_large * zero_mask)?)?;
 
         // Softmax over last dim (keys)
         let probs = softmax(&scores, scores.rank() - 1)?;
@@ -122,27 +107,27 @@ impl Block {
     }
 }
 
-pub struct Transformer<'a> {
-    pub config: &'a GPTConfig,
+pub struct Transformer {
     tok_emb: Embedding,
     pos_emb: Embedding,
     block: Block,
     lm_head: Linear,
+    max_seq_len: usize,
+    vocab_size: usize,
+    n_emb: usize,
+    rng: ThreadRng,
 }
 
-impl<'a> Transformer<'a> {
-    pub fn new(config: &'a GPTConfig) -> Result<Self> {
-        // random initial weights
-        let device = &config.device;
+impl Transformer {
+    pub fn new(vocab_size: usize, device: &Device, max_seq_len: usize, n_emb: usize) -> Result<Self> {
+        let mut var_map = VarMap::new();
+        let vb = VarBuilder::from_varmap(&mut var_map, DType::F32, device);
 
         // Zero-mean init: avoids bias toward any token (e.g. space) with weight tying
-        let tok_emb_weights =
-            Tensor::randn(0.0, 0.02f32, (config.vocab_size, config.n_embd), device)?;
-        let tok_emb = Embedding::new(tok_emb_weights, config.n_embd);
-
-        let pos_emb_weights =
-            Tensor::randn(0.0, 0.02f32, (config.max_seq_len, config.n_embd), device)?;
-        let pos_emb = Embedding::new(pos_emb_weights, config.n_embd);
+        let tok_emb_weights = vb.get((vocab_size, n_emb), "tok_emb")?;
+        let pos_emb_weights  = vb.get((max_seq_len, n_emb), "pos_emb")?;
+        let tok_emb = Embedding::new(tok_emb_weights, n_emb);
+        let pos_emb = Embedding::new(pos_emb_weights, n_emb);
 
         let block = Block::new(32, device)?;
 
@@ -151,12 +136,24 @@ impl<'a> Transformer<'a> {
         let lm_head = Linear::new(tok_emb.embeddings().clone(), None);
 
         Ok(Self {
-            config,
             tok_emb,
             pos_emb,
             block,
             lm_head,
+            max_seq_len,
+            vocab_size,
+            n_emb,
+            rng: rand::rng(),
         })
+    }
+
+    fn default(device: &Device)->Result<Self> {
+        Transformer::new(
+            64,
+            device,
+            512,
+            32,
+        )
     }
 
     fn input_embedding(&self, idx: &Tensor) -> Result<Tensor> {
@@ -166,9 +163,9 @@ impl<'a> Transformer<'a> {
         // I moved this part of the forward step here only to not clutter the main loop
         let (_batch, seq_len) = idx.dims2()?;
         assert!(
-            seq_len <= self.config.max_seq_len,
+            seq_len <= self.max_seq_len,
             "sequence length exceeds max sequence length of {}",
-            self.config.max_seq_len
+            self.max_seq_len
         );
 
         let tok = self.tok_emb.forward(idx)?;
@@ -187,55 +184,39 @@ impl<'a> Transformer<'a> {
         let x = self.block.forward(&x)?;
 
         let (batch, seq_len, _) = x.dims3()?;
-        let x = x.reshape((batch * seq_len, self.config.n_embd))?;
+        let x = x.reshape((batch * seq_len, self.n_emb))?;
         let logits = self.lm_head.forward(&x)?;
-        logits.reshape((batch, seq_len, self.config.vocab_size))
+        logits.reshape((batch, seq_len, self.vocab_size))
     }
 
-    pub fn generate(
-        &self,
-        tokenizer: &Tokenizer,
-        prompt: &str,
-        max_new_tokens: usize,
-    ) -> Result<String> {
-        let device = &self.config.device;
-        let mut tokens = tokenizer.encode(prompt);
-        let mut input = Tensor::from_tokens(&tokens, device)?;
-        input = input.unsqueeze(0)?; // convert to (1,S)
-
+    pub fn generate(&mut self, mut idx: Tensor, max_new_tokens: usize) -> Result<Tensor> {
+        // Takes in shape (batch, sequence)
+        // Returns in shape (batch, sequence)
+        // input tensor is updated in place
         for _ in 0..max_new_tokens {
-            let logits = self.forward(&input)?;
-
+            let logits = self.forward(&idx)?; // (batch, seq_len, vocab)
             let (_, seq_len, _) = logits.dims3()?;
-
-            let last_logits = logits.i((0, seq_len - 1))?;
-
-            // greed sampling, equals temperature=0
-            let next_id = last_logits.argmax(0)?.to_scalar::<u32>()?;
-            // Convert id to token
-            let next_token = tokenizer
-                .vocabulary
-                .get(&(next_id as u16))
-                .cloned()
-                .expect("Token not found");
-
-            // Add generated token to input and rebuild tensor
-            tokens.push(next_token);
-            input = Tensor::from_tokens(&tokens, device)?;
-            input = input.unsqueeze(0)?; // convert to (1,S)
+            let last_logits = logits.i((.., seq_len - 1, ..))?; // (batch, vocab)
+            let probabilities = ops::softmax(&last_logits, 1)?; // (128)
+            let probabilities = probabilities.squeeze(0)?;
+            let probs_vec = probabilities.to_vec1()?;
+            let next_token = sample_multinomial(&mut self.rng, &probs_vec)?;
+            // reshape to [1,1]
+            let next_tensor = Tensor::from_slice(&[next_token], &[1, 1], &idx.device())?;
+            idx = Tensor::cat(&[&idx, &next_tensor], 1)?;
         }
-
-        Ok(tokenizer.decode(&tokens))
+        Ok(idx)
     }
 }
 
 #[test]
 fn test_tok_emb_tieing() {
     // Given
-    let config = GPTConfig::default(64);
-    let input = Tensor::from_vec(vec![1u32, 5, 42, 9], (1, 4), &config.device).unwrap();
+    let device = Device::Cpu;
+    let input = Tensor::from_vec(vec![1u32, 5, 42, 9], (1, 4), &device).unwrap();
+
     // When
-    let model = Transformer::new(&config).unwrap();
+    let model = Transformer::default(&device).unwrap();
     let output = model.forward(&input).unwrap();
 
     // Then the shape should be (batch_size, sequence_length, vocab_size):
@@ -249,21 +230,23 @@ fn test_tok_emb_tieing() {
     // Meaning:
     // output[batch_index][token_position][vocab_index] = logit for that token
     let shape = output.shape();
-    assert_eq!(shape.dims(), &[1, 4, config.vocab_size]);
+    assert_eq!(shape.dims(), &[1, 4, model.vocab_size]);
 }
 
-#[test]
-fn test_generate() {
-    let tokenizer = Tokenizer::from_bytes();
-    let config = GPTConfig::default(tokenizer.vocabulary.len());
-    let prompt = "Hi";
-    // When
-    let model = Transformer::new(&config).unwrap();
-    let output = model.generate(&tokenizer, &prompt, 1).unwrap();
+    #[test]
+    fn test_generate_shape() -> Result<()> {
+        // Given
+        let device = Device::Cpu;
+        let mut model = Transformer::default(&device).unwrap();
+        let max_new_tokens = 1;
+        let seq_len = 3;
+        let idx = Tensor::from_slice(&[0u32, 1, 2], &[1, 3], &device)?; // seq_len=3
 
-    // Then
-    debug_assert!(
-        !output.is_empty(),
-        "Input prompt string should not be empty"
-    );
-}
+        // When
+        let output_idx = model.generate(idx, 1)?;
+
+        // Then
+        assert_eq!(output_idx.shape().dims(), &[1, seq_len+max_new_tokens]); // (batch, seq_len)
+
+        Ok(())
+    }

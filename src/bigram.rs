@@ -1,18 +1,11 @@
-use candle_core::{DType, Device, Error, IndexOp, Result, Shape, Tensor};
+use candle_core::{DType, Device, IndexOp, Result, Shape, Tensor};
 use candle_nn::{AdamW, Embedding, Module, Optimizer, ParamsAdamW, VarBuilder, VarMap, loss, ops};
 use rand::{
-    distr::{Distribution, weighted::WeightedIndex},
     rngs::ThreadRng,
 };
 
-use crate::dataset::Dataset;
+use crate::{dataset::Dataset, sampling::sample_multinomial};
 
-pub fn sample_multinomial(rng: &mut ThreadRng, prs: &Vec<f32>) -> candle_core::Result<u32> {
-    let distribution = WeightedIndex::new(prs).map_err(Error::wrap)?;
-    let next_token = distribution.sample(rng) as u32;
-
-    Ok(next_token)
-}
 
 /// A simple Bigram language model.
 ///
@@ -120,6 +113,7 @@ mod tests {
 
         Ok(())
     }
+
     #[test]
     fn test_generate_shape() -> Result<()> {
         // Given
