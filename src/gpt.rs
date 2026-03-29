@@ -1,6 +1,8 @@
 use candle_core::{DType, Device, IndexOp, Result, Shape, Tensor};
 use candle_nn::{
-    AdamW, Embedding, Init, LayerNorm, Linear, Module, Optimizer, ParamsAdamW, VarBuilder, VarMap, loss, ops::{self, softmax}
+    AdamW, Embedding, Init, LayerNorm, Linear, Module, Optimizer, ParamsAdamW, VarBuilder, VarMap,
+    layer_norm_no_bias, linear_no_bias, loss,
+    ops::{self, softmax},
 };
 use rand::rngs::ThreadRng;
 
@@ -18,20 +20,11 @@ struct SelfAttention {
 }
 
 impl SelfAttention {
-    fn new(n_embd: usize, device: Device) -> Result<Self> {
+    fn new(n_embd: usize, vb: VarBuilder<'_>) -> Result<Self> {
         Ok(SelfAttention {
-            q_proj: Linear::new(
-                Tensor::randn(0.5, 0.25f32, (n_embd, n_embd), &device)?,
-                None,
-            ),
-            k_proj: Linear::new(
-                Tensor::randn(0.5, 0.25f32, (n_embd, n_embd), &device)?,
-                None,
-            ),
-            v_proj: Linear::new(
-                Tensor::randn(0.5, 0.25f32, (n_embd, n_embd), &device)?,
-                None,
-            ),
+            q_proj: linear_no_bias(n_embd, n_embd, vb.pp("q_proj"))?,
+            k_proj: linear_no_bias(n_embd, n_embd, vb.pp("k_proj"))?,
+            v_proj: linear_no_bias(n_embd, n_embd, vb.pp("v_proj"))?,
         })
     }
     pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
@@ -88,15 +81,12 @@ struct Block {
 }
 
 impl Block {
-    fn new(n_embd: usize, device: &Device) -> Result<Self> {
-        let ln1_weights = Tensor::rand(0.0, 1.0f32, (n_embd,), device)?;
-        let ln2_weights = Tensor::rand(0.0, 1.0f32, (n_embd,), device)?;
-        let mlp_weights = Tensor::randn(0.0, 0.02f32, (n_embd, n_embd), device)?;
+    fn new(n_embd: usize, vb: VarBuilder<'_>) -> Result<Self> {
         Ok(Block {
-            ln1: LayerNorm::new_no_bias(ln1_weights, 0.01),
-            ln2: LayerNorm::new_no_bias(ln2_weights, 0.01),
-            attention: SelfAttention::new(n_embd, device.clone())?,
-            mlp: Linear::new(mlp_weights, None),
+            ln1: layer_norm_no_bias(n_embd, 0.01, vb.pp("ln1"))?,
+            ln2: layer_norm_no_bias(n_embd, 0.01, vb.pp("ln2"))?,
+            attention: SelfAttention::new(n_embd, vb.pp("attn"))?,
+            mlp: linear_no_bias(n_embd, n_embd, vb.pp("mlp"))?,
         })
     }
 }
@@ -132,7 +122,7 @@ impl Transformer {
         let tok_emb = Embedding::new(tok_emb_weights, n_emb);
         let pos_emb = Embedding::new(pos_emb_weights, n_emb);
 
-        let block = Block::new(n_emb, device)?;
+        let block = Block::new(n_emb, vb.pp("block"))?;
 
         // weight tying, we reuse the token embedding for the lm_head
         // TODO: find out whether we can reuse the actual tensor and not just clone it, for efficiency sake
@@ -149,6 +139,10 @@ impl Transformer {
             rng: rand::rng(),
             var_map,
         })
+    }
+
+    fn default(device: &Device) -> Result<Self> {
+        Transformer::new(64, device, 512, 32)
     }
 
     fn input_embedding(&self, idx: &Tensor) -> Result<Tensor> {
@@ -227,9 +221,6 @@ impl Module for Block {
 
 impl Training for Transformer {
     fn train(&self, dataset: &mut Dataset, num_epochs: usize, batch_size: usize) -> Result<()> {
-        // TODO: currently only token and positional embedding a part of varmap
-        // ergo only those two benefit from backprop and are trained
-        // refactor other layers to use varmap
         let params = ParamsAdamW {
             lr: 0.1, // set extra high so we can result fast in this toy example
             beta1: 0.9,
@@ -259,19 +250,6 @@ impl Training for Transformer {
     }
 }
 
-mod tests {
-    use candle_core::{Device, Tensor, Result};
-    use candle_nn::Module;
-
-    use crate::{gpt::Transformer, sampling::Generator};
-
-
-    impl Transformer {
-
-    fn default(device: &Device) -> Result<Self> {
-        Transformer::new(64, device, 512, 32)
-    }
-    }
 #[test]
 fn test_tok_emb_tieing() {
     // Given
@@ -312,5 +290,4 @@ fn test_generate_shape() -> Result<()> {
     assert_eq!(output_idx.shape().dims(), &[1, seq_len + max_new_tokens]); // (batch, seq_len)
 
     Ok(())
-}
 }
