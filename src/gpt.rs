@@ -1,11 +1,14 @@
-use candle_core::{DType, Device, IndexOp, Result, Tensor};
+use candle_core::{DType, Device, IndexOp, Result, Shape, Tensor};
 use candle_nn::{
-    ops::{self, softmax},
-    Embedding, LayerNorm, Linear, Module, VarBuilder, VarMap,
+    AdamW, Embedding, Init, LayerNorm, Linear, Module, Optimizer, ParamsAdamW, VarBuilder, VarMap, loss, ops::{self, softmax}
 };
 use rand::rngs::ThreadRng;
 
-use crate::sampling::{sample_multinomial, Generator};
+use crate::{
+    dataset::Dataset,
+    sampling::{Generator, sample_multinomial},
+    training::Training,
+};
 
 #[derive(Clone)]
 struct SelfAttention {
@@ -53,7 +56,8 @@ impl SelfAttention {
             .unsqueeze(0)?
             .broadcast_as((t, t))?;
         let mask = row.ge(&col)?.to_dtype(DType::F32)?;
-        let mask = mask.unsqueeze(0)?; // (t, t) -> (1, t, t) to match scores (b, t, t)
+        let mask = mask.unsqueeze(0)?; // (t, t) -> (1, t, t)
+        let mask = mask.broadcast_as((b, t, t))?; // explicit broadcast for Candle ops
 
         // Large negative constant for masked positions. Do not use -inf here:
         // `0 * (-inf)` is NaN (IEEE 754), and zero_mask is 0 on allowed cells, which
@@ -106,6 +110,7 @@ pub struct Transformer {
     vocab_size: usize,
     n_emb: usize,
     rng: ThreadRng,
+    var_map: VarMap,
 }
 
 impl Transformer {
@@ -118,13 +123,16 @@ impl Transformer {
         let mut var_map = VarMap::new();
         let vb = VarBuilder::from_varmap(&mut var_map, DType::F32, device);
 
-        // Zero-mean init: avoids bias toward any token (e.g. space) with weight tying
-        let tok_emb_weights = vb.get((vocab_size, n_emb), "tok_emb")?;
-        let pos_emb_weights = vb.get((max_seq_len, n_emb), "pos_emb")?;
+        let emb_init = Init::Randn {
+            mean: 0.,
+            stdev: 0.02,
+        };
+        let tok_emb_weights = vb.get_with_hints((vocab_size, n_emb), "tok_emb", emb_init)?;
+        let pos_emb_weights = vb.get_with_hints((max_seq_len, n_emb), "pos_emb", emb_init)?;
         let tok_emb = Embedding::new(tok_emb_weights, n_emb);
         let pos_emb = Embedding::new(pos_emb_weights, n_emb);
 
-        let block = Block::new(32, device)?;
+        let block = Block::new(n_emb, device)?;
 
         // weight tying, we reuse the token embedding for the lm_head
         // TODO: find out whether we can reuse the actual tensor and not just clone it, for efficiency sake
@@ -139,11 +147,8 @@ impl Transformer {
             vocab_size,
             n_emb,
             rng: rand::rng(),
+            var_map,
         })
-    }
-
-    fn default(device: &Device) -> Result<Self> {
-        Transformer::new(64, device, 512, 32)
     }
 
     fn input_embedding(&self, idx: &Tensor) -> Result<Tensor> {
@@ -151,7 +156,7 @@ impl Transformer {
         // representation = meaning(token emb) + location(position emb)
         //
         // I moved this part of the forward step here only to not clutter the main loop
-        let (_batch, seq_len) = idx.dims2()?;
+        let (batch, seq_len) = idx.dims2()?;
         assert!(
             seq_len <= self.max_seq_len,
             "sequence length exceeds max sequence length of {}",
@@ -161,6 +166,7 @@ impl Transformer {
         let tok = self.tok_emb.forward(idx)?;
         let pos_idx = Tensor::arange(0u32, seq_len as u32, idx.device())?.unsqueeze(0)?;
         let pos = self.pos_emb.forward(&pos_idx)?;
+        let pos = pos.broadcast_as((batch, seq_len, self.n_emb))?;
 
         let x = (tok + pos)?;
         // Keep (batch, seq_len, n_embd) for attention (needs 3D for Q@K^T)
@@ -219,6 +225,53 @@ impl Module for Block {
     }
 }
 
+impl Training for Transformer {
+    fn train(&self, dataset: &mut Dataset, num_epochs: usize, batch_size: usize) -> Result<()> {
+        // TODO: currently only token and positional embedding a part of varmap
+        // ergo only those two benefit from backprop and are trained
+        // refactor other layers to use varmap
+        let params = ParamsAdamW {
+            lr: 0.1, // set extra high so we can result fast in this toy example
+            beta1: 0.9,
+            beta2: 0.999,
+            eps: 1e-8,
+            weight_decay: 0.0,
+        };
+        let mut optimizer = AdamW::new(self.var_map.all_vars(), params)?;
+
+        for epoch in 0..num_epochs {
+            let (training_inputs, training_targets) =
+                dataset.random_training_batch(self.max_seq_len, batch_size)?;
+            let logits = self.forward(&training_inputs)?;
+            let (batch_size, time_size, channel_size) = logits.shape().dims3()?;
+            let loss = loss::cross_entropy(
+                &logits.reshape(Shape::from((batch_size * time_size, channel_size)))?,
+                &training_targets.reshape(Shape::from((batch_size * time_size,)))?,
+            )?;
+            optimizer.backward_step(&loss)?;
+
+            println!(
+                "Epoch: {epoch:3} Train loss: {:8.5}",
+                loss.to_scalar::<f32>()?
+            );
+        }
+        Ok(())
+    }
+}
+
+mod tests {
+    use candle_core::{Device, Tensor, Result};
+    use candle_nn::Module;
+
+    use crate::{gpt::Transformer, sampling::Generator};
+
+
+    impl Transformer {
+
+    fn default(device: &Device) -> Result<Self> {
+        Transformer::new(64, device, 512, 32)
+    }
+    }
 #[test]
 fn test_tok_emb_tieing() {
     // Given
@@ -259,4 +312,5 @@ fn test_generate_shape() -> Result<()> {
     assert_eq!(output_idx.shape().dims(), &[1, seq_len + max_new_tokens]); // (batch, seq_len)
 
     Ok(())
+}
 }

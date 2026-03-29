@@ -1,18 +1,16 @@
 use std::io::{self, Write};
 
 use candle_core::{Device, IndexOp, Tensor};
-use llm_rs::bigram::Bigram;
 use llm_rs::bpe::{TokenTranslation, Tokenizer};
 use llm_rs::dataset::Dataset;
+use llm_rs::gpt::Transformer;
 use llm_rs::sampling::Generator;
 use llm_rs::training::Training;
 
 fn main() -> anyhow::Result<()> {
     let tokenizer = Tokenizer::ascii();
     let device = Device::Cpu;
-    // let config = GPTConfig::default(tokenizer.vocabulary.len());
-    // let model = Transformer::new(&config)?;
-    let mut model = Bigram::new(tokenizer.vocabulary.len(), &device)?;
+    let mut model = Transformer::new(tokenizer.vocabulary.len(),&device, 128, 32)?;
     let mut dataset = Dataset::from_file("./data/gutenberg_txts/corpus.txt", 0.8, &tokenizer)?;
     println!(
         "Training data shape: {:?}, dtype: {:?}",
@@ -31,7 +29,7 @@ fn main() -> anyhow::Result<()> {
         &dataset.training_data.i(0..block_size).unwrap(),
         tokenizer.decode(&dataset.training_data.i(0..block_size).unwrap().to_tokens(&tokenizer))
     );
-    let _ = model.train(&mut dataset, 128, 64);
+    model.train(&mut dataset, 512, 128)?;
 
     println!("Chitchat with your GPT");
     println!("Type something and press enter. Ctrl+C to exit.\n");
