@@ -3,7 +3,7 @@ use std::io::{self, Write};
 use candle_core::{Device, IndexOp, Tensor};
 use llm_rs::bpe::{TokenTranslation, Tokenizer};
 use llm_rs::dataset::Dataset;
-use llm_rs::gpt::Transformer;
+use llm_rs::transformer::Transformer;
 use llm_rs::sampling::Generator;
 use llm_rs::training::Training;
 

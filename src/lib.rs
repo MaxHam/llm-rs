@@ -1,5 +1,5 @@
 pub mod bpe;
-pub mod gpt;
+pub mod transformer;
 pub mod bigram;
 pub mod dataset;
 pub mod sampling;
