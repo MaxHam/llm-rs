@@ -376,7 +376,7 @@ fn test_block_shape() -> Result<()> {
     let n_heads = 4;
     let vb = VarBuilder::from_varmap(&var_map, DType::F32, &device);
     let block = Block::new(n_embd, n_heads, vb).unwrap();
-    let idx = Tensor::from_slice(&[0f32, 1.0, 2.0], &[1, 32, 8], &device)?; // (B, T, C)
+    let idx = Tensor::zeros((1, 32, 8), DType::F32, &device)?;
 
     // When
     let output_idx = block.forward(&idx)?;
