@@ -17,7 +17,7 @@ fn main() -> anyhow::Result<()> {
     let mut model = Transformer::new(tokenizer.vocabulary.len(), &device, 256, 384, 6, 6, 0.2)?;
     let mut dataset = Dataset::from_file("./test_corpus.txt", 0.9, &tokenizer, &device)?;
 
-    model.train(&mut dataset, 5000, 64)?;
+    model.train(&mut dataset, 256, 64)?;
 
     println!("Chitchat with your GPT");
     println!("Type something and press enter. Ctrl+C to exit.\n");

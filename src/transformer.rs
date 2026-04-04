@@ -319,6 +319,17 @@ impl Module for Block {
     }
 }
 
+impl Transformer {
+    fn compute_loss(&self, inputs: &Tensor, targets: &Tensor) -> Result<Tensor> {
+        let logits = self.forward(inputs)?;
+        let (bs, ts, cs) = logits.shape().dims3()?;
+        loss::cross_entropy(
+            &logits.reshape(Shape::from((bs * ts, cs)))?,
+            &targets.reshape(Shape::from((bs * ts,)))?,
+        )
+    }
+}
+
 impl Training for Transformer {
     fn train(&self, dataset: &mut Dataset, num_epochs: usize, batch_size: usize) -> Result<()> {
         let params = ParamsAdamW {
@@ -331,42 +342,25 @@ impl Training for Transformer {
         let mut optimizer = AdamW::new(self.var_map.all_vars(), params)?;
 
         for epoch in 0..num_epochs {
-            let (training_inputs, training_targets) =
-                dataset.random_training_batch(self.max_seq_len, batch_size)?;
-            let logits = self.forward(&training_inputs)?;
-            let (batch_size, time_size, channel_size) = logits.shape().dims3()?;
-            let loss = loss::cross_entropy(
-                &logits.reshape(Shape::from((batch_size * time_size, channel_size)))?,
-                &training_targets.reshape(Shape::from((batch_size * time_size,)))?,
-            )?;
-            optimizer.backward_step(&loss)?;
+            let train_loss_scalar = {
+                let (inputs, targets) =
+                    dataset.random_training_batch(self.max_seq_len, batch_size)?;
+                let loss = self.compute_loss(&inputs, &targets)?;
+                let scalar = loss.to_scalar::<f32>()?;
+                optimizer.backward_step(&loss)?;
+                scalar
+            };
 
-            let (training_inputs, training_targets) =
-                dataset.random_training_batch(self.max_seq_len, batch_size)?;
-            let logits = self.forward(&training_inputs)?;
-            let (batch_size, time_size, channel_size) = logits.shape().dims3()?;
-            let loss = loss::cross_entropy(
-                &logits.reshape(Shape::from((batch_size * time_size, channel_size)))?,
-                &training_targets.reshape(Shape::from((batch_size * time_size,)))?,
-            )?;
+            let val_loss_scalar = {
+                let (inputs, targets) =
+                    dataset.validation_batch(self.max_seq_len, batch_size)?;
+                self.compute_loss(&inputs, &targets)?.to_scalar::<f32>()?
+            };
 
-            // validation
-            let (validation_inputs, validation_targets) =
-                dataset.validation_batch(self.max_seq_len, batch_size)?;
-            let validation_logits = self.forward(&validation_inputs)?;
-            let (val_batch_size, val_time_size, val_channel_size) =
-                validation_logits.shape().dims3()?;
-            let validation_loss = loss::cross_entropy(
-                &logits.reshape(Shape::from((
-                    val_batch_size * val_time_size,
-                    val_channel_size,
-                )))?,
-                &&validation_targets.reshape(Shape::from((val_batch_size * val_time_size,)))?,
-            )?;
             println!(
                 "Epoch: {epoch:3}/{num_epochs:3} Train loss: {:8.5}, Validation loss: {:8.5}",
-                loss.to_scalar::<f32>()?,
-                validation_loss.to_scalar::<f32>()?
+                train_loss_scalar,
+                val_loss_scalar
             );
         }
         Ok(())
