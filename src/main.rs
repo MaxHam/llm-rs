@@ -1,6 +1,6 @@
 use std::io::{self, Write};
 
-use candle_core::{Device, IndexOp, Tensor};
+use candle_core::{Device, Tensor};
 use llm_rs::bpe::{TokenTranslation, Tokenizer};
 use llm_rs::dataset::Dataset;
 use llm_rs::transformer::Transformer;
@@ -8,14 +8,14 @@ use llm_rs::sampling::Generator;
 use llm_rs::training::Training;
 
 fn main() -> anyhow::Result<()> {
-    let corpus = std::fs::read_to_string("./data/shakespeare.txt")?;
+    let corpus = std::fs::read_to_string("./test_corpus.txt")?;
     // Small vocab + small model so we can train on CPU quickly.
     // Byte-level BPE generally improves "speaking" a lot vs ASCII tokens.
     let vocab_size = 512u16;
     let tokenizer = Tokenizer::train(&corpus, vocab_size).expect("failed to train tokenizer");
-    let device = Device::Cpu;
+    let device = Device::new_cuda(0)?;
     let mut model = Transformer::new(tokenizer.vocabulary.len(), &device, 256, 384, 6, 6, 0.2)?;
-    let mut dataset = Dataset::from_file("./data/shakespeare.txt", 0.9, &tokenizer)?;
+    let mut dataset = Dataset::from_file("./test_corpus.txt", 0.9, &tokenizer, &device)?;
 
     model.train(&mut dataset, 5000, 64)?;
 

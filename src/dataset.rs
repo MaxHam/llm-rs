@@ -19,12 +19,13 @@ pub struct Dataset {
     pub training_size: usize,
     pub validation_data: Tensor,
     pub validation_size: usize,
+    device: Device,
     rng: ThreadRng,
 }
 
 impl Dataset {
     /// Create a dataset from a flat 1D tensor (sequence of token IDs)
-    pub fn new(data: Tensor, training_ratio: f64) -> Self {
+    pub fn new(data: Tensor, training_ratio: f64, device: &Device) -> Self {
         // Ensure tensor is rank-1
         assert_eq!(data.rank(), 1, "Dataset tensor must be rank-1");
 
@@ -42,12 +43,13 @@ impl Dataset {
             training_size,
             validation_data,
             validation_size,
+            device: device.clone(),
             rng,
         }
     }
 
     /// Load a dataset from a text file using a tokenizer
-    pub fn from_file(path: &str, training_ratio: f64, tokenizer: &Tokenizer) -> Result<Self> {
+    pub fn from_file(path: &str, training_ratio: f64, tokenizer: &Tokenizer, device: &Device) -> Result<Self> {
         let mut file = File::open(path)
             .map_err(|e| candle_core::Error::msg(format!("Failed to open file: {}", e)))?;
 
@@ -64,7 +66,7 @@ impl Dataset {
         let tokens = tokenizer.encode(&contents);
 
         let data = Tensor::from_tokens(&tokens, &Device::Cpu)?;
-        Ok(Dataset::new(data, training_ratio))
+        Ok(Dataset::new(data, training_ratio, device))
     }
 
     /// Sample a random training batch
@@ -81,13 +83,15 @@ impl Dataset {
         let contexts = max_indices.iter().map(|&idx| {
             self.training_data.i(idx..idx + block_size).unwrap()
         });
-        let stacked_contexts = Tensor::stack(&contexts.collect::<Vec<_>>(), 0)?;
+        let stacked_contexts = Tensor::stack(&contexts.collect::<Vec<_>>(), 0)?
+            .to_device(&self.device)?;
 
         // Targets: same slice shifted by 1
         let targets = max_indices.iter().map(|&idx| {
             self.training_data.i(idx + 1..idx + block_size + 1).unwrap()
         });
-        let stacked_targets = Tensor::stack(&targets.collect::<Vec<_>>(), 0)?;
+        let stacked_targets = Tensor::stack(&targets.collect::<Vec<_>>(), 0)?
+            .to_device(&self.device)?;
 
         Ok((stacked_contexts, stacked_targets))
     }
@@ -106,12 +110,14 @@ impl Dataset {
         let contexts = indices.iter().map(|&idx| {
             self.validation_data.i(idx..idx + block_size).unwrap()
         });
-        let stacked_contexts = Tensor::stack(&contexts.collect::<Vec<_>>(), 0)?;
+        let stacked_contexts = Tensor::stack(&contexts.collect::<Vec<_>>(), 0)?
+            .to_device(&self.device)?;
     
         let targets = indices.iter().map(|&idx| {
             self.validation_data.i(idx + 1..idx + block_size + 1).unwrap()
         });
-        let stacked_targets = Tensor::stack(&targets.collect::<Vec<_>>(), 0)?;
+        let stacked_targets = Tensor::stack(&targets.collect::<Vec<_>>(), 0)?
+            .to_device(&self.device)?;
     
         Ok((stacked_contexts, stacked_targets))
     }
@@ -132,7 +138,7 @@ mod tests {
         let training_ratio = 0.6;
 
         // When
-        let mut dataset = Dataset::new(tensor, training_ratio);
+        let mut dataset = Dataset::new(tensor, training_ratio, &Device::Cpu);
 
         // Then
         assert_eq!(dataset.training_size, 6);
@@ -164,7 +170,7 @@ mod tests {
         let training_ratio = 0.8;
 
         // When
-        let dataset = Dataset::new(tensor, training_ratio);
+        let dataset = Dataset::new(tensor, training_ratio, &Device::Cpu);
 
         // Then
         let expected_training_size = (tokens.len() as f64 * training_ratio) as usize;
