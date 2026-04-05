@@ -8,7 +8,7 @@ use rand::{
 };
 
 use crate::{dataset::Dataset, sampling::{Generator, sample_multinomial}};
-use crate::{training::Training};
+use crate::training::{Training, TrainingConfig};
 
 
 /// A simple Bigram language model.
@@ -45,29 +45,30 @@ impl Bigram {
 }
 
 impl Training for Bigram {
-    fn train(&self, dataset: &mut Dataset, num_epochs: usize, batch_size: usize) -> Result<()> {
+    fn train(&self, dataset: &mut Dataset, config: &TrainingConfig) -> Result<()> {
         let params = ParamsAdamW {
-            lr: 0.1, // set extra high so we can result fast in this toy example
+            lr: config.lr,
             beta1: 0.9,
             beta2: 0.999,
             eps: 1e-8,
-            weight_decay: 0.0,
+            weight_decay: config.weight_decay,
         };
         let mut optimizer = AdamW::new(self.var_map.all_vars(), params)?;
 
-        for epoch in 0..num_epochs {
+        for epoch in 0..config.num_epochs {
             let (training_inputs, training_targets) =
-                dataset.random_training_batch(self.vocab_size, batch_size)?;
+                dataset.random_training_batch(self.vocab_size, config.batch_size)?;
             let logits = self.forward(&training_inputs)?;
-            let (batch_size, time_size, channel_size) = logits.shape().dims3()?;
+            let (bs, ts, cs) = logits.shape().dims3()?;
             let loss = loss::cross_entropy(
-                &logits.reshape(Shape::from((batch_size * time_size, channel_size)))?,
-                &training_targets.reshape(Shape::from((batch_size * time_size,)))?,
+                &logits.reshape(Shape::from((bs * ts, cs)))?,
+                &training_targets.reshape(Shape::from((bs * ts,)))?,
             )?;
             optimizer.backward_step(&loss)?;
 
             println!(
-                "Epoch: {epoch:3} Train loss: {:8.5}",
+                "Epoch: {epoch:3}/{:3} Train loss: {:8.5}",
+                config.num_epochs,
                 loss.to_scalar::<f32>()?
             );
         }

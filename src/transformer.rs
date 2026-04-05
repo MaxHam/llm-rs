@@ -7,7 +7,7 @@ use rand::rngs::ThreadRng;
 use crate::{
     dataset::Dataset,
     sampling::{Generator, sample_multinomial},
-    training::Training,
+    training::{Training, TrainingConfig},
 };
 
 #[derive(Clone)]
@@ -331,20 +331,20 @@ impl Transformer {
 }
 
 impl Training for Transformer {
-    fn train(&self, dataset: &mut Dataset, num_epochs: usize, batch_size: usize) -> Result<()> {
+    fn train(&self, dataset: &mut Dataset, config: &TrainingConfig) -> Result<()> {
         let params = ParamsAdamW {
-            lr: 1e-3,
+            lr: config.lr,
             beta1: 0.9,
             beta2: 0.999,
             eps: 1e-8,
-            weight_decay: 0.0,
+            weight_decay: config.weight_decay,
         };
         let mut optimizer = AdamW::new(self.var_map.all_vars(), params)?;
 
-        for epoch in 0..num_epochs {
+        for epoch in 0..config.num_epochs {
             let train_loss_scalar = {
                 let (inputs, targets) =
-                    dataset.random_training_batch(self.max_seq_len, batch_size)?;
+                    dataset.random_training_batch(self.max_seq_len, config.batch_size)?;
                 let loss = self.compute_loss(&inputs, &targets)?;
                 let scalar = loss.to_scalar::<f32>()?;
                 optimizer.backward_step(&loss)?;
@@ -353,12 +353,13 @@ impl Training for Transformer {
 
             let val_loss_scalar = {
                 let (inputs, targets) =
-                    dataset.validation_batch(self.max_seq_len, batch_size)?;
+                    dataset.validation_batch(self.max_seq_len, config.batch_size)?;
                 self.compute_loss(&inputs, &targets)?.to_scalar::<f32>()?
             };
 
             println!(
-                "Epoch: {epoch:3}/{num_epochs:3} Train loss: {:8.5}, Validation loss: {:8.5}",
+                "Epoch: {epoch:3}/{:3} Train loss: {:8.5}, Validation loss: {:8.5}",
+                config.num_epochs,
                 train_loss_scalar,
                 val_loss_scalar
             );
