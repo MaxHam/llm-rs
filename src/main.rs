@@ -2,13 +2,13 @@ use std::io::{self, Write};
 
 use candle_core::Tensor;
 use clap::Parser;
-use llm_rs::bigram::Bigram;
-use llm_rs::bpe::{TokenTranslation, Tokenizer};
-use llm_rs::cli::{Cli, Model, TokenizerKind};
-use llm_rs::dataset::Dataset;
-use llm_rs::sampling::Generator;
-use llm_rs::training::{Training, TrainingConfig};
-use llm_rs::transformer::Transformer;
+use nanogpt_ish::bigram::Bigram;
+use nanogpt_ish::bpe::{TokenTranslation, Tokenizer};
+use nanogpt_ish::cli::{Cli, Model, TokenizerKind};
+use nanogpt_ish::dataset::Dataset;
+use nanogpt_ish::sampling::Generator;
+use nanogpt_ish::training::{Training, TrainingConfig};
+use nanogpt_ish::transformer::Transformer;
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();

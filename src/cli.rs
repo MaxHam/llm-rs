@@ -37,7 +37,7 @@ impl DeviceKind {
 }
 
 #[derive(Parser, Debug)]
-#[command(name = "llm-rs", about = "Train and chat with small language models")]
+#[command(name = "nanogpt-ish", about = "Train and chat with small language models")]
 pub struct Cli {
     /// Model architecture
     #[arg(short, long, default_value = "transformer")]
