@@ -12,7 +12,7 @@ use llm_rs::transformer::Transformer;
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
-    let device = cli.device.to_device(cli.cuda_device)?;
+    let device = cli.device.to_device()?;
 
     println!("Loading corpus from {}", cli.data);
     let corpus = std::fs::read_to_string(&cli.data)?;

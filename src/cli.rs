@@ -1,3 +1,4 @@
+use anyhow::Error;
 use candle_core::Device;
 use clap::{Parser, ValueEnum};
 
@@ -16,14 +17,21 @@ pub enum TokenizerKind {
 #[derive(ValueEnum, Clone, Debug)]
 pub enum DeviceKind {
     Cpu,
+    #[cfg(feature = "cuda")]
     Cuda,
 }
 
 impl DeviceKind {
-    pub fn to_device(&self, cuda_ordinal: usize) -> candle_core::Result<Device> {
-        match self {
+    pub fn to_device(&self) -> Result<Device, Error> {
+    match self {
             DeviceKind::Cpu => Ok(Device::Cpu),
-            DeviceKind::Cuda => Device::new_cuda(cuda_ordinal),
+
+            #[cfg(feature = "cuda")]
+            DeviceKind::Cuda => {
+                // CUDA implementation
+                // for simplicity, we just always pick one
+                Ok(Device::Cuda(0))
+            }
         }
     }
 }
@@ -44,12 +52,8 @@ pub struct Cli {
     pub tokenizer: TokenizerKind,
 
     /// Compute device
-    #[arg(long, default_value = "cuda")]
+    #[arg(long, default_value = "cpu")]
     pub device: DeviceKind,
-
-    /// CUDA device ordinal (ignored when --device cpu)
-    #[arg(long, default_value_t = 0)]
-    pub cuda_device: usize,
 
     // ── Tokenizer ───────────────────────────────────────────────
     /// BPE vocabulary size (must be > 256 for bpe tokenizer)
