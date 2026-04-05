@@ -5,16 +5,7 @@ This repository will be a place for me to learn LLM basics. Target is to write a
 The code is heavily influenced by the ["Let's build GPT: from scratch, in code, spelled out."](https://github.com/karpathy/ng-video-lecture) lecture by Andrej Karpathy.
 
 ## Requirements
-- Python
-- uv
 - Rust
-
-## Development
-1. Download text corpus.
-```bash
-uv sync
-uv run gutenberg.py
-```
 
 ## How to use
 Run 
