@@ -17,6 +17,8 @@ uv run gutenberg.py
 Run 
 ```shell
 cargo run --release # for optimal compilation and fast training
+# with cuda
+cargo run --release --features cuda
 ```
 
 ## Roadmap
