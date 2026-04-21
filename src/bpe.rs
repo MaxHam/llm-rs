@@ -1,8 +1,5 @@
-use std::{
-    collections::{BinaryHeap, HashMap},
-    hash::Hash,
-    vec,
-};
+use std::collections::{BinaryHeap, HashMap};
+use std::hash::Hash;
 
 use candle_core::{Device, Result as CnResult, Tensor};
 
@@ -15,20 +12,20 @@ pub struct Token {
 }
 
 impl Token {
-    pub fn new(id: u16, value: Vec<Utf8Byte>) -> Token {
-        Token { id, value }
+    pub fn new(id: u16, value: Vec<Utf8Byte>) -> Self {
+        Self { id, value }
     }
-    fn from_pair(id: &u16, pair: &(Token, Token)) -> Token {
+    fn from_pair(id: &u16, pair: &(Token, Token)) -> Self {
         let mut new_bytes = Vec::new();
         new_bytes.extend_from_slice(&pair.0.value);
         new_bytes.extend_from_slice(&pair.1.value);
-        Token {
+        Self {
             id: *id,
             value: new_bytes,
         }
     }
-    pub fn from_byte(byte: Utf8Byte) -> Token {
-        Token {
+    pub fn from_byte(byte: Utf8Byte) -> Self {
+        Self {
             id: byte as u16,
             value: vec![byte],
         }

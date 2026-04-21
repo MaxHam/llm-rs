@@ -94,8 +94,7 @@ fn main() -> anyhow::Result<()> {
         }
 
         let encoded = tokenizer.encode(input);
-        let mut prompt = Tensor::from_tokens(&encoded, &device)?;
-        prompt = prompt.unsqueeze(0)?;
+        let prompt = Tensor::from_tokens(&encoded, &device)?.unsqueeze(0)?;
 
         let output = generator.generate(prompt, cli.max_tokens, cli.temperature, cli.top_k)?;
         let decoded = tokenizer.decode(&output.to_tokens(&tokenizer));

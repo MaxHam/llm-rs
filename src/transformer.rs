@@ -224,7 +224,7 @@ impl Transformer {
         })
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     fn default(device: &Device) -> Result<Self> {
         Transformer::new(64, device, 512, 32, 1, 1, 0.1)
     }

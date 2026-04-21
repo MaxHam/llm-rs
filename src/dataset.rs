@@ -8,7 +8,7 @@ use crate::bpe::{TokenTranslation, Tokenizer};
 fn filter_ascii(input: &str) -> String {
     input
         .bytes()                  // iterate over bytes
-        .filter(|&b| b.is_ascii() && b <= 128) // keep only ASCII <= 128
+        .filter(|b| b.is_ascii())
         .map(|b| b as char)       // convert back to char
         .collect()
 }
@@ -29,7 +29,7 @@ impl Dataset {
         // Ensure tensor is rank-1
         assert_eq!(data.rank(), 1, "Dataset tensor must be rank-1");
 
-        let seq_len = *data.shape().dims().first().unwrap();
+        let seq_len = data.dim(0).unwrap();
         let training_size = (seq_len as f64 * training_ratio) as usize;
         let training_data = data.i(0..training_size).unwrap();
 
@@ -59,7 +59,7 @@ impl Dataset {
         // If we are using `Tokenizer::ascii()`, it can't represent bytes > 127.
         // For byte-level BPE tokenizers, we keep the full text.
         let contents = if tokenizer.is_ascii() {
-            filter_ascii(contents.as_str())
+            filter_ascii(&contents)
         } else {
             contents
         };
