@@ -28,46 +28,63 @@ impl SelfAttention {
         })
     }
     pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        let (b, t, _c) = x.dims3()?;
+        // We apply a triangular mask to prevent the model from peeking at tokens in the future.
+        // Translation models use bidirectional (unmasked) attention in the encoder since the full
+        // input is known upfront. Here we're building a decoder-only text generator, so the model
+        // must only attend to past tokens — otherwise it would learn to cheat during training and
+        // produce poor predictions at inference time.
+        //
+        // key:        A    B    C    D
+        // query:A  [ 0.8  0.2  0.5  0.1 ]
+        //       B  [ 0.3  0.9  0.4  0.7 ]
+        //       C  [ 0.1  0.6  0.8  0.3 ]
+        //       D  [ 0.4  0.2  0.9  0.6 ]
+        //
+        // mask     [ 1  0  0  0 ]
+        //          [ 1  1  0  0 ]
+        //          [ 1  1  1  0 ]
+        //          [ 1  1  1  1 ]
+        // apply mask(block out 0 with -inf, so that they vanish when softmaxed):
+        // key:         A      B      C      D
+        // query:A  [ 0.8   -inf   -inf   -inf ]
+        //       B  [ 0.3    0.9   -inf   -inf ]
+        //       C  [ 0.1    0.6    0.8   -inf ]
+        //       D  [ 0.4    0.2    0.9    0.6 ]
 
-        // Linear projections
+        let device = x.device();
+        let (_b, t, _c) = x.dims3()?;
+
         let q = self.q_proj.forward(x)?;
         let k = self.k_proj.forward(x)?;
         let v = self.v_proj.forward(x)?;
 
-        // Attention scores: Q @ K^T / sqrt(d) — scale prevents softmax saturation
-        let scale = (x.dim(2)? as f64).sqrt();
-        let k_t = k.transpose(1, 2)?; // (b, t, c) -> (b, c, t)
-        let mut scores = (q.matmul(&k_t)? / scale)?;
+        // attention head size
+        let d_k = q.dim(2)?;
 
-        // -------- Causal mask (lower triangular: attend to current and past only) --------
-        let device = x.device();
-        let row = Tensor::arange(0f32, t as f32, device)?
-            .unsqueeze(1)?
-            .broadcast_as((t, t))?;
-        let col = Tensor::arange(0f32, t as f32, device)?
-            .unsqueeze(0)?
-            .broadcast_as((t, t))?;
-        let mask = row.ge(&col)?.to_dtype(DType::F32)?;
-        let mask = mask.unsqueeze(0)?; // (t, t) -> (1, t, t)
-        let mask = mask.broadcast_as((b, t, t))?; // explicit broadcast for Candle ops
+        // dot product of query and transposed keys -> attention scores for each query-key pair
+        // keys are transposed so that we have Q:(T, head_size), K:(head_size,T) so that they inner dims
+        // match and they can be multiplied
+        let scores = q.matmul(&k.transpose(1, 2)?)?;
 
-        // Large negative constant for masked positions. Do not use -inf here:
-        // `0 * (-inf)` is NaN (IEEE 754), and zero_mask is 0 on allowed cells, which
-        // would poison the whole scores tensor before softmax.
-        let neg_large = Tensor::full(-1e9f32, (b, t, t), device)?;
+        // scale scores so that variance stays kinda constant even when changing head size
+        // since without scaling the numbers would grow with growing d_k(head size)
+        let scaled = (scores / (d_k as f64).sqrt())?;
 
-        let zero_mask = (mask.eq(0)?).to_dtype(DType::F32)?;
-        scores = ((scores * mask)? + (neg_large * zero_mask)?)?;
+        let mask = Tensor::tril2(t, DType::U8, device)?;
+        let neg_inf = Tensor::full(f32::NEG_INFINITY, scaled.shape(), device)?;
+
+        // apply triangular mask on attention scores
+        let mask_broadcast = mask.broadcast_as(scaled.shape())?;
+        let masked = mask_broadcast.where_cond(&scaled, &neg_inf)?;
 
         // Softmax over last dim (keys)
-        let mut attn = softmax(&scores, scores.rank() - 1)?;
+        let mut attn = softmax(&masked, masked.rank() - 1)?;
 
         // apply dropout to attention weights
         // TODO: handle train arg better
         attn = self.dropout.forward(&attn, true)?;
 
-        // Weighted sum
+        // weighted sum
         let attn_out = attn.matmul(&v)?;
 
         Ok(attn_out)
